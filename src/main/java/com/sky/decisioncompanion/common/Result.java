@@ -2,11 +2,13 @@ package com.sky.decisioncompanion.common;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
 
 import java.time.LocalDateTime;
 
-@Schema(description = "统一响应格式")
+@Data
 @JsonInclude(JsonInclude.Include.NON_NULL)
+@Schema(description = "统一响应格式")
 public class Result<T> {
 
     @Schema(description = "状态码，200表示成功")
@@ -20,10 +22,6 @@ public class Result<T> {
 
     @Schema(description = "响应时间")
     private LocalDateTime timestamp;
-
-    private Result() {
-        this.timestamp = LocalDateTime.now();
-    }
 
     public static <T> Result<T> success(T data) {
         Result<T> response = new Result<>();
@@ -50,37 +48,5 @@ public class Result<T> {
 
     public static <T> Result<T> error(String message) {
         return error(500, message);
-    }
-
-    public int getCode() {
-        return code;
-    }
-
-    public void setCode(int code) {
-        this.code = code;
-    }
-
-    public String getMessage() {
-        return message;
-    }
-
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
-    public T getData() {
-        return data;
-    }
-
-    public void setData(T data) {
-        this.data = data;
-    }
-
-    public LocalDateTime getTimestamp() {
-        return timestamp;
-    }
-
-    public void setTimestamp(LocalDateTime timestamp) {
-        this.timestamp = timestamp;
     }
 }

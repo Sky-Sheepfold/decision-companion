@@ -1,7 +1,9 @@
 package com.sky.decisioncompanion.common;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import lombok.Data;
 
+@Data
 @Schema(description = "聊天响应数据")
 public class ChatResponse {
 
@@ -12,14 +14,6 @@ public class ChatResponse {
     }
 
     public ChatResponse(String reply) {
-        this.reply = reply;
-    }
-
-    public String getReply() {
-        return reply;
-    }
-
-    public void setReply(String reply) {
         this.reply = reply;
     }
 }
