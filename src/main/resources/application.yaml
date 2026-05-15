@@ -1,3 +1,33 @@
 spring:
   application:
     name: decision-companion
+
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY}
+      chat:
+        options:
+          model: qwen-plus
+          temperature: 0.7
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/companion?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+    username: root
+    password: ${DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  sql:
+    init:
+      mode: never
+
+server:
+  port: 8080
+
+logging:
+  level:
+    com.sky.decisioncompanion: DEBUG
+    org.springframework.ai: DEBUG

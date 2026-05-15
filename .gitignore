@@ -35,3 +35,4 @@ build/
 docs/
 .trae/
 frontend/
+init.sql
