@@ -3,9 +3,13 @@ package com.sky.decisioncompanion.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sky.decisioncompanion.model.*;
 import com.sky.decisioncompanion.repository.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +20,8 @@ import java.util.Map;
 
 @Service
 public class ProfileExtractService {
+
+    private static final Logger logger = LoggerFactory.getLogger(ProfileExtractService.class);
 
     private final ChatClient chatClient;
     private final ProfileValuesRepository valuesRepository;
@@ -33,7 +39,7 @@ public class ProfileExtractService {
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
-            VectorStore vectorStore) {
+            @Autowired(required = false) @Nullable VectorStore vectorStore) {
         this.chatClient = chatClientBuilder.build();
         this.valuesRepository = valuesRepository;
         this.decisionRepository = decisionRepository;
@@ -61,7 +67,7 @@ public class ProfileExtractService {
 
             saveToVectorStore(userId, userMessage, analysis);
         } catch (Exception e) {
-            System.err.println("档案提炼失败: " + e.getMessage());
+            logger.error("档案提炼失败, userId: {}, sessionId: {}", userId, sessionId, e);
         }
     }
 
@@ -101,7 +107,7 @@ public class ProfileExtractService {
                 }
             }
         } catch (Exception e) {
-            System.err.println("价值观提取失败: " + e.getMessage());
+            logger.error("价值观提取失败, userId: {}", userId, e);
         }
     }
 
@@ -121,7 +127,7 @@ public class ProfileExtractService {
                 }
             }
         } catch (Exception e) {
-            System.err.println("情绪模式提取失败: " + e.getMessage());
+            logger.error("情绪模式提取失败, userId: {}", userId, e);
         }
     }
 
@@ -141,7 +147,7 @@ public class ProfileExtractService {
                 }
             }
         } catch (Exception e) {
-            System.err.println("决策提取失败: " + e.getMessage());
+            logger.error("决策提取失败, userId: {}", userId, e);
         }
     }
 
@@ -162,7 +168,7 @@ public class ProfileExtractService {
                 }
             }
         } catch (Exception e) {
-            System.err.println("关系提取失败: " + e.getMessage());
+            logger.error("关系提取失败, userId: {}", userId, e);
         }
     }
 
@@ -184,11 +190,16 @@ public class ProfileExtractService {
                 }
             }
         } catch (Exception e) {
-            System.err.println("恐惧提取失败: " + e.getMessage());
+            logger.error("恐惧提取失败, userId: {}", userId, e);
         }
     }
 
     private void saveToVectorStore(Long userId, String userMessage, String analysis) {
+        if (this.vectorStore == null) {
+            logger.warn("向量存储服务暂不可用，跳过存储, userId: {}", userId);
+            return;
+        }
+
         try {
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("userId", String.valueOf(userId));
@@ -199,7 +210,7 @@ public class ProfileExtractService {
                     metadata);
             vectorStore.add(java.util.List.of(document));
         } catch (Exception e) {
-            System.err.println("向量存储失败: " + e.getMessage());
+            logger.error("向量存储失败, userId: {}", userId, e);
         }
     }
 
