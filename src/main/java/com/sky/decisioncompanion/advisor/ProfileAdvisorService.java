@@ -5,6 +5,8 @@ import com.sky.decisioncompanion.model.*;
 import com.sky.decisioncompanion.repository.*;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -26,7 +28,7 @@ public class ProfileAdvisorService {
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
-            VectorStore vectorStore) {
+            @Autowired(required = false) @Nullable VectorStore vectorStore) {
         this.valuesRepository = valuesRepository;
         this.decisionRepository = decisionRepository;
         this.emotionRepository = emotionRepository;
@@ -95,6 +97,10 @@ public class ProfileAdvisorService {
     }
 
     private String getSemanticContext(Long userId, String userMessage) {
+        if (this.vectorStore == null) {
+            return "（暂无相关背景信息 - 向量存储服务暂不可用）";
+        }
+
         try {
             SearchRequest searchRequest = SearchRequest.builder()
                     .query(userMessage)

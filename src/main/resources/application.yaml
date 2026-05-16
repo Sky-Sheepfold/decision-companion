@@ -16,6 +16,8 @@ spring:
           host: ${CHROMA_HOST}
           port: ${CHROMA_PORT}
         collection-name: companion_profiles
+        tenant-name: default_tenant
+        database-name: default_database
         initialize-schema: true
 
   datasource:
