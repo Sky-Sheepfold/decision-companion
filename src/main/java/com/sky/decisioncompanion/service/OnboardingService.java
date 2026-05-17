@@ -1,8 +1,5 @@
 package com.sky.decisioncompanion.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.sky.decisioncompanion.model.User;
-import com.sky.decisioncompanion.repository.UserRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -10,7 +7,7 @@ import java.util.List;
 @Service
 public class OnboardingService {
 
-    private final UserRepository userRepository;
+    private final UserService userService;
     private final DecisionAgentService agentService;
 
     private static final List<OnboardingQuestion> QUESTIONS = List.of(
@@ -21,8 +18,8 @@ public class OnboardingService {
             new OnboardingQuestion(5, "relationships", "在你的生活中，有没有对你影响很大的人？你们的关系是怎样的？")
     );
 
-    public OnboardingService(UserRepository userRepository, DecisionAgentService agentService) {
-        this.userRepository = userRepository;
+    public OnboardingService(UserService userService, DecisionAgentService agentService) {
+        this.userService = userService;
         this.agentService = agentService;
     }
 
@@ -53,14 +50,7 @@ public class OnboardingService {
     }
 
     public void completeOnboarding(String sessionId) {
-        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(User::getSessionId, sessionId);
-        User user = userRepository.selectOne(wrapper);
-
-        if (user != null) {
-            user.setOnboarded(true);
-            userRepository.updateById(user);
-        }
+        userService.markOnboarded(sessionId);
     }
 
     public record OnboardingQuestion(int step, String type, String question) {}

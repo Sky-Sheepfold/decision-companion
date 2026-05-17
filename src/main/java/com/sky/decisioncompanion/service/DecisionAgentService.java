@@ -1,6 +1,7 @@
 package com.sky.decisioncompanion.service;
 
 import com.sky.decisioncompanion.advisor.ProfileAdvisorService;
+import com.sky.decisioncompanion.model.User;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -13,27 +14,33 @@ public class DecisionAgentService {
     private final ChatClient chatClient;
     private final ProfileAdvisorService profileAdvisorService;
     private final ProfileExtractService profileExtractService;
+    private final UserService userService;
 
     public DecisionAgentService(
             ChatClient.Builder builder,
             ChatMemory chatMemory,
             ProfileAdvisorService profileAdvisorService,
-            ProfileExtractService profileExtractService) {
+            ProfileExtractService profileExtractService,
+            UserService userService) {
         this.chatClient = builder
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
         this.profileAdvisorService = profileAdvisorService;
         this.profileExtractService = profileExtractService;
+        this.userService = userService;
     }
 
     public String chat(String sessionId, String userMessage) {
+        User user = userService.getOrCreateUser(sessionId);
+        Long userId = user.getId();
+
         String reply = chatClient.prompt()
                 .user(userMessage)
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
                 .call()
                 .content();
 
-        profileExtractService.extractAndSave(null, sessionId, userMessage, reply);
+        profileExtractService.extractAndSave(userId, sessionId, userMessage, reply);
 
         return reply;
     }
@@ -54,10 +61,20 @@ public class DecisionAgentService {
     }
 
     public Flux<String> chatStream(String sessionId, String userMessage) {
+        User user = userService.getOrCreateUser(sessionId);
+        Long userId = user.getId();
+        StringBuilder replyBuilder = new StringBuilder();
+
         return chatClient.prompt()
                 .user(userMessage)
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
                 .stream()
-                .content();
+                .content()
+                .doOnNext(replyBuilder::append)
+                .doOnComplete(() -> profileExtractService.extractAndSave(
+                        userId,
+                        sessionId,
+                        userMessage,
+                        replyBuilder.toString()));
     }
 }

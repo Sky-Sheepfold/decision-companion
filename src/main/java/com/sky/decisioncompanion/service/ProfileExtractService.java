@@ -1,6 +1,7 @@
 package com.sky.decisioncompanion.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.sky.decisioncompanion.model.*;
 import com.sky.decisioncompanion.repository.*;
 import org.slf4j.Logger;
@@ -29,6 +30,7 @@ public class ProfileExtractService {
     private final ProfileEmotionRepository emotionRepository;
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
+    private final UserService userService;
     private final VectorStore vectorStore;
     private final ObjectMapper objectMapper;
 
@@ -39,6 +41,7 @@ public class ProfileExtractService {
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
+            UserService userService,
             @Autowired(required = false) @Nullable VectorStore vectorStore) {
         this.chatClient = chatClientBuilder.build();
         this.valuesRepository = valuesRepository;
@@ -46,12 +49,19 @@ public class ProfileExtractService {
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
+        this.userService = userService;
         this.vectorStore = vectorStore;
         this.objectMapper = new ObjectMapper();
     }
 
     @Async
     public void extractAndSave(Long userId, String sessionId, String userMessage, String aiResponse) {
+        Long effectiveUserId = resolveUserId(userId, sessionId);
+        if (effectiveUserId == null) {
+            logger.warn("跳过档案提炼：userId 为空, sessionId: {}", sessionId);
+            return;
+        }
+
         try {
             String analysisPrompt = buildAnalysisPrompt(userMessage, aiResponse);
             String analysis = chatClient.prompt()
@@ -59,15 +69,15 @@ public class ProfileExtractService {
                     .call()
                     .content();
 
-            extractValues(userId, analysis);
-            extractEmotions(userId, analysis);
-            extractDecisions(userId, userMessage, analysis);
-            extractRelationships(userId, analysis);
-            extractFears(userId, analysis);
+            extractValues(effectiveUserId, analysis);
+            extractEmotions(effectiveUserId, analysis);
+            extractDecisions(effectiveUserId, userMessage, analysis);
+            extractRelationships(effectiveUserId, analysis);
+            extractFears(effectiveUserId, analysis);
 
-            saveToVectorStore(userId, userMessage, analysis);
+            saveToVectorStore(effectiveUserId, userMessage, analysis);
         } catch (Exception e) {
-            logger.error("档案提炼失败, userId: {}, sessionId: {}", userId, sessionId, e);
+            logger.error("档案提炼失败, userId: {}, sessionId: {}", effectiveUserId, sessionId, e);
         }
     }
 
@@ -84,7 +94,7 @@ public class ProfileExtractService {
                     "values": [{"item": "价值观维度", "preference": "倾向描述", "confidence": 0.8}],
                     "emotions": [{"emotion": "情绪类型", "behavior": "行为表现", "trigger": "触发场景"}],
                     "decisions": [{"topic": "决策主题", "choice": "选择", "reason": "原因"}],
-                    "relationships": [{"name": "关系人", "role": "角色", "influence": "影响"}],
+                    "relationships": [{"name": "关系人", "role": "角色", "influenceLevel": "高/中/低", "influenceStyle": "影响方式"}],
                     "fears": [{"type": "fear/boundary", "description": "描述", "confidence": 0.7}]
                 }
                 """.formatted(userMessage, aiResponse);
@@ -98,9 +108,9 @@ public class ProfileExtractService {
                 for (var value : values) {
                     ProfileValues profile = new ProfileValues();
                     profile.setUserId(userId);
-                    profile.setItem(value.get("item").asText());
-                    profile.setPreference(value.get("preference").asText());
-                    profile.setConfidence(new BigDecimal(value.get("confidence").asText()));
+                    profile.setItem(truncate(text(value, "item"), 100));
+                    profile.setPreference(truncate(text(value, "preference"), 200));
+                    profile.setConfidence(decimal(value, "confidence", "0.5"));
                     profile.setEvidence("{}");
                     profile.setUpdatedAt(LocalDateTime.now());
                     valuesRepository.insert(profile);
@@ -119,9 +129,9 @@ public class ProfileExtractService {
                 for (var emotion : emotions) {
                     ProfileEmotion profile = new ProfileEmotion();
                     profile.setUserId(userId);
-                    profile.setEmotion(emotion.get("emotion").asText());
-                    profile.setBehavior(emotion.get("behavior").asText());
-                    profile.setTriggerDesc(emotion.has("trigger") ? emotion.get("trigger").asText() : "");
+                    profile.setEmotion(truncate(text(emotion, "emotion"), 100));
+                    profile.setBehavior(truncate(text(emotion, "behavior"), 500));
+                    profile.setTriggerDesc(truncate(text(emotion, "trigger", "triggerDesc", "trigger_desc"), 200));
                     profile.setUpdatedAt(LocalDateTime.now());
                     emotionRepository.insert(profile);
                 }
@@ -139,9 +149,9 @@ public class ProfileExtractService {
                 for (var decision : decisions) {
                     ProfileDecision profile = new ProfileDecision();
                     profile.setUserId(userId);
-                    profile.setTopic(decision.get("topic").asText());
-                    profile.setChoice(decision.get("choice").asText());
-                    profile.setReason(decision.has("reason") ? decision.get("reason").asText() : "");
+                    profile.setTopic(truncate(text(decision, "topic"), 200));
+                    profile.setChoice(truncate(text(decision, "choice"), 500));
+                    profile.setReason(text(decision, "reason"));
                     profile.setCreatedAt(LocalDateTime.now());
                     decisionRepository.insert(profile);
                 }
@@ -157,12 +167,20 @@ public class ProfileExtractService {
                 String relationshipsJson = extractJsonArray(analysis, "relationships");
                 var relationships = objectMapper.readTree(relationshipsJson);
                 for (var relationship : relationships) {
+                    String rawInfluence = text(relationship, "influence");
+                    String rawInfluenceLevel = text(relationship, "influenceLevel", "influence_level", "level");
+                    String influenceStyle = text(relationship, "influenceStyle", "influence_style");
+                    if (influenceStyle.isBlank()) {
+                        influenceStyle = rawInfluence;
+                    }
+
                     ProfileRelationship profile = new ProfileRelationship();
                     profile.setUserId(userId);
-                    profile.setName(relationship.get("name").asText());
-                    profile.setRole(relationship.get("role").asText());
-                    profile.setInfluenceLevel(
-                            relationship.has("influence") ? relationship.get("influence").asText() : "中");
+                    profile.setName(truncate(text(relationship, "name"), 50));
+                    profile.setRole(truncate(text(relationship, "role"), 50));
+                    profile.setInfluenceLevel(normalizeInfluenceLevel(rawInfluenceLevel));
+                    profile.setInfluenceStyle(truncate(influenceStyle, 200));
+                    profile.setNote(truncate(text(relationship, "note"), 500));
                     profile.setUpdatedAt(LocalDateTime.now());
                     relationshipRepository.insert(profile);
                 }
@@ -180,11 +198,12 @@ public class ProfileExtractService {
                 for (var fear : fears) {
                     ProfileFear profile = new ProfileFear();
                     profile.setUserId(userId);
-                    profile.setType(fear.get("type").asText());
-                    profile.setDescription(fear.get("description").asText());
-                    profile.setConfidence(
-                            new BigDecimal(fear.has("confidence") ? fear.get("confidence").asText() : "0.5"));
+                    profile.setType(truncate(defaultIfBlank(text(fear, "type"), "fear"), 10));
+                    profile.setDescription(truncate(text(fear, "description"), 500));
+                    profile.setManifestation(truncate(text(fear, "manifestation"), 500));
+                    profile.setConfidence(decimal(fear, "confidence", "0.5"));
                     profile.setEvidence("{}");
+                    profile.setBoundaryType(truncate(text(fear, "boundaryType", "boundary_type"), 10));
                     profile.setUpdatedAt(LocalDateTime.now());
                     fearRepository.insert(profile);
                 }
@@ -225,5 +244,66 @@ public class ProfileExtractService {
         if (end == -1)
             return "[]";
         return text.substring(start, end + 1);
+    }
+
+    private Long resolveUserId(Long userId, String sessionId) {
+        if (userId != null) {
+            return userId;
+        }
+        if (sessionId == null || sessionId.isBlank()) {
+            return null;
+        }
+
+        try {
+            User user = userService.getOrCreateUser(sessionId);
+            return user.getId();
+        } catch (Exception e) {
+            logger.error("根据 sessionId 获取用户失败, sessionId: {}", sessionId, e);
+            return null;
+        }
+    }
+
+    private String text(JsonNode node, String... keys) {
+        for (String key : keys) {
+            JsonNode value = node.get(key);
+            if (value != null && !value.isNull()) {
+                return value.asText("");
+            }
+        }
+        return "";
+    }
+
+    private BigDecimal decimal(JsonNode node, String key, String defaultValue) {
+        String value = defaultIfBlank(text(node, key), defaultValue);
+        try {
+            return new BigDecimal(value);
+        } catch (NumberFormatException e) {
+            return new BigDecimal(defaultValue);
+        }
+    }
+
+    private String defaultIfBlank(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
+    }
+
+    private String normalizeInfluenceLevel(String value) {
+        if (value == null || value.isBlank()) {
+            return "中";
+        }
+        String normalized = value.trim();
+        if (normalized.contains("高") || normalized.equalsIgnoreCase("high")) {
+            return "高";
+        }
+        if (normalized.contains("低") || normalized.equalsIgnoreCase("low")) {
+            return "低";
+        }
+        return "中";
     }
 }

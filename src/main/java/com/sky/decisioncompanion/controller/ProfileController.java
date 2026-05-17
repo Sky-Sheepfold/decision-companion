@@ -17,7 +17,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/profile")
-@CrossOrigin(origins = "http://localhost:5173")
 @Tag(name = "用户档案", description = "用户档案查询和管理")
 public class ProfileController {
 

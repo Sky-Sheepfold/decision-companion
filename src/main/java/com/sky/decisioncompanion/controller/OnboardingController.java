@@ -19,7 +19,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/onboarding")
-@CrossOrigin(origins = "http://localhost:5173") 
 @Tag(name = "冷启动服务", description = "新用户引导和档案初始化")
 public class OnboardingController {
 

@@ -18,7 +18,6 @@ import reactor.core.publisher.Flux;
 
 @RestController
 @RequestMapping("/api/agent")
-@CrossOrigin(origins = "http://localhost:5173")
 @Tag(name = "Agent 对话服务", description = "提供与通义千问的对话功能")
 public class AgentController {
 
