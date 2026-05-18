@@ -1,0 +1,157 @@
+<svg width="1120" height="760" viewBox="0 0 1120 760" role="img" aria-labelledby="title desc" xmlns="http://www.w3.org/2000/svg">
+  <title id="title">人生决策伙伴 Agent 架构图</title>
+  <desc id="desc">展示人生决策伙伴 Agent 从用户、前端、后端服务、AI 模型到 MySQL 和 Chroma 存储层的整体架构。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#8A7A66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#8A6A45" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .bg { fill: #FFF9F1; }
+      .panel { fill: #FFFFFF; stroke: #E8D8C4; stroke-width: 1.2; filter: url(#shadow); }
+      .panel-soft { fill: #FFF3DE; stroke: #C8845A; stroke-width: 1.2; filter: url(#shadow); }
+      .panel-blue { fill: #EEF6FF; stroke: #4E83B6; stroke-width: 1.2; filter: url(#shadow); }
+      .panel-green { fill: #EEF8F2; stroke: #4B9B73; stroke-width: 1.2; filter: url(#shadow); }
+      .panel-purple { fill: #F2F0FF; stroke: #7E72D9; stroke-width: 1.2; filter: url(#shadow); }
+      .panel-red { fill: #FFF0EC; stroke: #D87957; stroke-width: 1.2; filter: url(#shadow); }
+      .title { font: 700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #2C2C2A; }
+      .subtitle { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #8B735C; }
+      .section { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #2C2C2A; }
+      .label { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #3E3329; }
+      .small { font: 400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #7B6652; }
+      .tiny { font: 400 11px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #806D59; }
+      .arrow { stroke: #8A7A66; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .arrow-soft { stroke: #B89B79; stroke-width: 1.4; fill: none; marker-end: url(#arrow); stroke-dasharray: 5 5; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1120" height="760" rx="24"/>
+
+  <text class="title" x="560" y="42" text-anchor="middle">人生决策伙伴 Agent 架构图</text>
+  <text class="subtitle" x="560" y="68" text-anchor="middle">越用越懂你：对话陪伴、档案沉淀、语义记忆与画像可视化</text>
+
+  <!-- User -->
+  <rect class="panel-soft" x="40" y="118" width="150" height="96" rx="14"/>
+  <text class="label" x="115" y="151" text-anchor="middle">用户</text>
+  <text class="small" x="115" y="174" text-anchor="middle">日常倾诉</text>
+  <text class="small" x="115" y="194" text-anchor="middle">重大决策</text>
+
+  <!-- Frontend -->
+  <rect class="panel-blue" x="240" y="96" width="230" height="148" rx="14"/>
+  <text class="section" x="355" y="124" text-anchor="middle">前端 React + Vite</text>
+  <rect class="panel" x="266" y="142" width="178" height="26" rx="8"/>
+  <text class="tiny" x="355" y="160" text-anchor="middle">/onboarding 冷启动引导</text>
+  <rect class="panel" x="266" y="176" width="178" height="26" rx="8"/>
+  <text class="tiny" x="355" y="194" text-anchor="middle">/chat SSE 对话界面</text>
+  <rect class="panel" x="266" y="210" width="178" height="26" rx="8"/>
+  <text class="tiny" x="355" y="228" text-anchor="middle">/profile 用户画像页</text>
+
+  <!-- API -->
+  <rect class="panel" x="520" y="128" width="120" height="84" rx="14"/>
+  <text class="label" x="580" y="158" text-anchor="middle">API</text>
+  <text class="small" x="580" y="181" text-anchor="middle">HTTP JSON</text>
+  <text class="small" x="580" y="199" text-anchor="middle">SSE Stream</text>
+
+  <!-- Backend -->
+  <rect class="panel-purple" x="700" y="92" width="380" height="230" rx="16"/>
+  <text class="section" x="890" y="122" text-anchor="middle">后端 Spring Boot + Spring AI</text>
+
+  <rect class="panel" x="724" y="142" width="100" height="44" rx="9"/>
+  <text class="tiny" x="774" y="161" text-anchor="middle">Agent</text>
+  <text class="tiny" x="774" y="176" text-anchor="middle">Controller</text>
+
+  <rect class="panel" x="838" y="142" width="100" height="44" rx="9"/>
+  <text class="tiny" x="888" y="161" text-anchor="middle">Onboarding</text>
+  <text class="tiny" x="888" y="176" text-anchor="middle">Controller</text>
+
+  <rect class="panel" x="952" y="142" width="100" height="44" rx="9"/>
+  <text class="tiny" x="1002" y="161" text-anchor="middle">Profile</text>
+  <text class="tiny" x="1002" y="176" text-anchor="middle">Controller</text>
+
+  <rect class="panel" x="724" y="205" width="150" height="44" rx="9"/>
+  <text class="tiny" x="799" y="224" text-anchor="middle">DecisionAgentService</text>
+  <text class="tiny" x="799" y="239" text-anchor="middle">ChatClient 编排</text>
+
+  <rect class="panel" x="902" y="205" width="150" height="44" rx="9"/>
+  <text class="tiny" x="977" y="224" text-anchor="middle">ProfileExtractService</text>
+  <text class="tiny" x="977" y="239" text-anchor="middle">异步提炼档案</text>
+
+  <rect class="panel" x="724" y="264" width="150" height="34" rx="9"/>
+  <text class="tiny" x="799" y="286" text-anchor="middle">ProfileAdvisor 档案召回</text>
+
+  <rect class="panel" x="902" y="264" width="150" height="34" rx="9"/>
+  <text class="tiny" x="977" y="286" text-anchor="middle">UserService 会话用户</text>
+
+  <!-- External AI -->
+  <rect class="panel-red" x="700" y="338" width="240" height="70" rx="14"/>
+  <text class="label" x="820" y="366" text-anchor="middle">DashScope 通义千问</text>
+  <text class="small" x="820" y="389" text-anchor="middle">默认模型：qwen-plus</text>
+
+  <!-- Storage -->
+  <text class="section" x="560" y="388" text-anchor="middle">存储层</text>
+  <rect class="panel-green" x="120" y="420" width="230" height="104" rx="14"/>
+  <text class="label" x="235" y="455" text-anchor="middle">MySQL companion</text>
+  <text class="small" x="235" y="480" text-anchor="middle">用户表 + 五类结构化档案</text>
+  <text class="small" x="235" y="500" text-anchor="middle">MyBatis-Plus 读写</text>
+
+  <rect class="panel-green" x="440" y="420" width="230" height="104" rx="14"/>
+  <text class="label" x="555" y="455" text-anchor="middle">Chroma Vector Store</text>
+  <text class="small" x="555" y="480" text-anchor="middle">conversation_analysis</text>
+  <text class="small" x="555" y="500" text-anchor="middle">向量化 · 检索 · 召回</text>
+
+  <rect class="panel-green" x="760" y="420" width="230" height="104" rx="14"/>
+  <text class="label" x="875" y="455" text-anchor="middle">InMemory ChatMemory</text>
+  <text class="small" x="875" y="480" text-anchor="middle">按 sessionId 隔离会话</text>
+  <text class="small" x="875" y="500" text-anchor="middle">最近 100 条消息窗口</text>
+
+  <!-- Profiles -->
+  <text class="section" x="560" y="585" text-anchor="middle">五类用户档案</text>
+  <rect class="panel-soft" x="70" y="618" width="160" height="68" rx="12"/>
+  <text class="label" x="150" y="646" text-anchor="middle">价值观</text>
+  <text class="tiny" x="150" y="666" text-anchor="middle">被动提炼 · 全量召回</text>
+
+  <rect class="panel-green" x="270" y="618" width="160" height="68" rx="12"/>
+  <text class="label" x="350" y="646" text-anchor="middle">决策历史</text>
+  <text class="tiny" x="350" y="666" text-anchor="middle">主动追问 · 语义召回</text>
+
+  <rect class="panel-purple" x="470" y="618" width="160" height="68" rx="12"/>
+  <text class="label" x="550" y="646" text-anchor="middle">情绪模式</text>
+  <text class="tiny" x="550" y="666" text-anchor="middle">识别情境 · 指导语气</text>
+
+  <rect class="panel-red" x="670" y="618" width="160" height="68" rx="12"/>
+  <text class="label" x="750" y="646" text-anchor="middle">关系图谱</text>
+  <text class="tiny" x="750" y="666" text-anchor="middle">重要他人 · 影响方式</text>
+
+  <rect class="panel" x="870" y="618" width="180" height="68" rx="12"/>
+  <text class="label" x="960" y="646" text-anchor="middle">恐惧与边界</text>
+  <text class="tiny" x="960" y="666" text-anchor="middle">高置信写入 · 红线识别</text>
+
+  <!-- Arrows -->
+  <path class="arrow" d="M 190 166 L 236 166"/>
+  <path class="arrow" d="M 470 170 L 516 170"/>
+  <path class="arrow" d="M 640 170 L 696 170"/>
+
+  <path class="arrow" d="M 800 249 L 800 334"/>
+  <path class="arrow-soft" d="M 890 322 C 890 340, 820 326, 820 334"/>
+
+  <path class="arrow-soft" d="M 976 249 C 976 345, 292 345, 292 416"/>
+  <path class="arrow-soft" d="M 976 249 C 976 352, 555 350, 555 416"/>
+  <path class="arrow-soft" d="M 799 249 C 799 342, 875 350, 875 416"/>
+  <path class="arrow-soft" d="M 799 298 C 725 355, 555 360, 555 416"/>
+  <path class="arrow-soft" d="M 799 298 C 620 365, 235 370, 235 416"/>
+
+  <path class="arrow" d="M 235 524 C 235 575, 150 575, 150 614"/>
+  <path class="arrow" d="M 235 524 C 235 574, 350 574, 350 614"/>
+  <path class="arrow" d="M 235 524 C 235 574, 550 574, 550 614"/>
+  <path class="arrow" d="M 235 524 C 235 574, 750 574, 750 614"/>
+  <path class="arrow" d="M 235 524 C 235 574, 960 574, 960 614"/>
+
+  <!-- Flow labels -->
+  <text class="tiny" x="215" y="153" text-anchor="middle">使用</text>
+  <text class="tiny" x="495" y="156" text-anchor="middle">请求</text>
+  <text class="tiny" x="670" y="156" text-anchor="middle">路由</text>
+  <text class="tiny" x="858" y="330" text-anchor="middle">模型调用</text>
+  <text class="tiny" x="435" y="353" text-anchor="middle">档案写入 / 语义记忆</text>
+</svg>
