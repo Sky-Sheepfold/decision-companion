@@ -30,7 +30,6 @@ public class ProfileExtractService {
     private final ProfileEmotionRepository emotionRepository;
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
-    private final UserService userService;
     private final VectorStore vectorStore;
     private final ObjectMapper objectMapper;
 
@@ -41,7 +40,6 @@ public class ProfileExtractService {
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
-            UserService userService,
             @Autowired(required = false) @Nullable VectorStore vectorStore) {
         this.chatClient = chatClientBuilder.build();
         this.valuesRepository = valuesRepository;
@@ -49,16 +47,14 @@ public class ProfileExtractService {
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
-        this.userService = userService;
         this.vectorStore = vectorStore;
         this.objectMapper = new ObjectMapper();
     }
 
     @Async
-    public void extractAndSave(Long userId, String sessionId, String userMessage, String aiResponse) {
-        Long effectiveUserId = resolveUserId(userId, sessionId);
-        if (effectiveUserId == null) {
-            logger.warn("跳过档案提炼：userId 为空, sessionId: {}", sessionId);
+    public void extractAndSave(Long userId, String userMessage, String aiResponse) {
+        if (userId == null) {
+            logger.warn("跳过档案提炼：userId 为空");
             return;
         }
 
@@ -69,15 +65,15 @@ public class ProfileExtractService {
                     .call()
                     .content();
 
-            extractValues(effectiveUserId, analysis);
-            extractEmotions(effectiveUserId, analysis);
-            extractDecisions(effectiveUserId, userMessage, analysis);
-            extractRelationships(effectiveUserId, analysis);
-            extractFears(effectiveUserId, analysis);
+            extractValues(userId, analysis);
+            extractEmotions(userId, analysis);
+            extractDecisions(userId, userMessage, analysis);
+            extractRelationships(userId, analysis);
+            extractFears(userId, analysis);
 
-            saveToVectorStore(effectiveUserId, userMessage, analysis);
+            saveToVectorStore(userId, userMessage, analysis);
         } catch (Exception e) {
-            logger.error("档案提炼失败, userId: {}, sessionId: {}", effectiveUserId, sessionId, e);
+            logger.error("档案提炼失败, userId: {}", userId, e);
         }
     }
 
@@ -244,23 +240,6 @@ public class ProfileExtractService {
         if (end == -1)
             return "[]";
         return text.substring(start, end + 1);
-    }
-
-    private Long resolveUserId(Long userId, String sessionId) {
-        if (userId != null) {
-            return userId;
-        }
-        if (sessionId == null || sessionId.isBlank()) {
-            return null;
-        }
-
-        try {
-            User user = userService.getOrCreateUser(sessionId);
-            return user.getId();
-        } catch (Exception e) {
-            logger.error("根据 sessionId 获取用户失败, sessionId: {}", sessionId, e);
-            return null;
-        }
     }
 
     private String text(JsonNode node, String... keys) {

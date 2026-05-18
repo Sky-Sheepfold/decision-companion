@@ -1,5 +1,6 @@
 package com.sky.decisioncompanion.controller;
 
+import cn.dev33.satoken.stp.StpUtil;
 import com.sky.decisioncompanion.common.Result;
 import com.sky.decisioncompanion.model.User;
 import com.sky.decisioncompanion.service.OnboardingService;
@@ -52,8 +53,9 @@ public class OnboardingController {
     @Operation(summary = "提交问题答案", description = "处理用户的回答，返回AI的响应")
     public ResponseEntity<Result<Map<String, Object>>> submitAnswer(
             @Valid @RequestBody OnboardingAnswerRequest request) {
+        Long userId = StpUtil.getLoginIdAsLong();
         String reply = onboardingService.processAnswer(
-                request.sessionId(),
+                userId,
                 request.step(),
                 request.answer()
         );
@@ -61,7 +63,7 @@ public class OnboardingController {
         boolean isLastStep = request.step() >= onboardingService.getTotalSteps();
 
         if (isLastStep) {
-            onboardingService.completeOnboarding(request.sessionId());
+            onboardingService.completeOnboarding(userId);
         }
 
         return ResponseEntity.ok(Result.success(Map.of(
@@ -72,11 +74,10 @@ public class OnboardingController {
         )));
     }
 
-    @GetMapping("/status/{sessionId}")
+    @GetMapping("/status")
     @Operation(summary = "获取冷启动状态", description = "检查用户是否已完成冷启动")
-    public ResponseEntity<Result<Map<String, Object>>> getStatus(
-            @Parameter(description = "会话ID") @PathVariable @NotBlank String sessionId) {
-        User user = userService.getUserBySessionId(sessionId);
+    public ResponseEntity<Result<Map<String, Object>>> getStatus() {
+        User user = userService.getUserById(StpUtil.getLoginIdAsLong());
         boolean completed = user != null && Boolean.TRUE.equals(user.getOnboarded());
         int currentStep = completed ? onboardingService.getTotalSteps() : 1;
 
@@ -88,7 +89,6 @@ public class OnboardingController {
     }
 
     public record OnboardingAnswerRequest(
-            @Parameter(description = "会话ID") @NotBlank String sessionId,
             @Parameter(description = "问题步骤号") @Min(1) @Max(5) int step,
             @Parameter(description = "用户答案") @NotBlank String answer) {}
 }

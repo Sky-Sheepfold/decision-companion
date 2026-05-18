@@ -3,7 +3,6 @@ package com.sky.decisioncompanion.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.sky.decisioncompanion.model.User;
 import com.sky.decisioncompanion.repository.UserRepository;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -15,52 +14,32 @@ public class UserService {
         this.userRepository = userRepository;
     }
 
-    public User getOrCreateUser(String sessionId) {
-        User user = getUserBySessionId(sessionId);
-
-        if (user == null) {
-            user = new User(sessionId);
-            try {
-                userRepository.insert(user);
-            } catch (DuplicateKeyException e) {
-                User existing = getUserBySessionId(sessionId);
-                if (existing != null) {
-                    return existing;
-                }
-                throw e;
-            }
-        }
-
-        if (user.getId() == null) {
-            User persisted = getUserBySessionId(sessionId);
-            if (persisted == null || persisted.getId() == null) {
-                throw new IllegalStateException("用户创建失败，无法获取自增ID: " + sessionId);
-            }
-            user = persisted;
-        }
-
-        return user;
-    }
-
-    public User getUserBySessionId(String sessionId) {
+    public User getUserByUsername(String username) {
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(User::getSessionId, sessionId);
+        wrapper.eq(User::getUsername, username);
         return userRepository.selectOne(wrapper);
     }
 
-    public boolean isOnboarded(String sessionId) {
-        User user = getUserBySessionId(sessionId);
+    public User getUserById(Long id) {
+        return userRepository.selectById(id);
+    }
+
+    public User createUser(String username, String encodedPassword) {
+        User user = new User(username, encodedPassword);
+        userRepository.insert(user);
+        return getUserByUsername(username);
+    }
+
+    public boolean isOnboarded(Long userId) {
+        User user = getUserById(userId);
         return user != null && Boolean.TRUE.equals(user.getOnboarded());
     }
 
-    public void updateNickname(String sessionId, String nickname) {
-        User user = getOrCreateUser(sessionId);
-        user.setNickname(nickname);
-        userRepository.updateById(user);
-    }
-
-    public void markOnboarded(String sessionId) {
-        User user = getOrCreateUser(sessionId);
+    public void markOnboarded(Long userId) {
+        User user = getUserById(userId);
+        if (user == null) {
+            throw new IllegalArgumentException("用户不存在");
+        }
         user.setOnboarded(true);
         userRepository.updateById(user);
     }

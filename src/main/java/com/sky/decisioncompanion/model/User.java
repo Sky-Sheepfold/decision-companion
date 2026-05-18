@@ -1,6 +1,7 @@
 package com.sky.decisioncompanion.model;
 
 import com.baomidou.mybatisplus.annotation.*;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -17,11 +18,12 @@ public class User {
     @TableId(type = IdType.AUTO)
     private Long id;
 
-    @Schema(description = "会话ID")
-    private String sessionId;
+    @Schema(description = "用户名，唯一，支持中文")
+    private String username;
 
-    @Schema(description = "昵称")
-    private String nickname;
+    @JsonIgnore
+    @Schema(description = "BCrypt 加密后的密码")
+    private String password;
 
     @Schema(description = "是否完成冷启动")
     private Boolean onboarded;
@@ -30,8 +32,9 @@ public class User {
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 
-    public User(String sessionId) {
-        this.sessionId = sessionId;
+    public User(String username, String password) {
+        this.username = username;
+        this.password = password;
         this.onboarded = false;
     }
 }

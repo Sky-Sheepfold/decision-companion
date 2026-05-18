@@ -33,6 +33,13 @@ spring:
 server:
   port: 8080
 
+sa-token:
+  token-name: Authorization
+  token-prefix: Bearer
+  timeout: 604800
+  is-read-cookie: false
+  jwt-secret-key: ${SA_TOKEN_JWT_SECRET_KEY:decision-companion-dev-secret-change-me}
+
 logging:
   level:
     com.sky.decisioncompanion: DEBUG

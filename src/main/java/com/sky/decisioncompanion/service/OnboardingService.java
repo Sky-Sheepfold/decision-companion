@@ -38,7 +38,7 @@ public class OnboardingService {
         return QUESTIONS.size();
     }
 
-    public String processAnswer(String sessionId, int step, String answer) {
+    public String processAnswer(Long userId, int step, String answer) {
         String prompt = String.format(
                 "用户正在完成冷启动问卷。第%d步的问题是：%s\n用户的回答是：%s\n请用温暖、理解的方式回应用户，可以适当追问或总结。",
                 step,
@@ -46,11 +46,11 @@ public class OnboardingService {
                 answer
         );
 
-        return agentService.chat(sessionId, prompt);
+        return agentService.chat(userId, prompt);
     }
 
-    public void completeOnboarding(String sessionId) {
-        userService.markOnboarded(sessionId);
+    public void completeOnboarding(Long userId) {
+        userService.markOnboarded(userId);
     }
 
     public record OnboardingQuestion(int step, String type, String question) {}

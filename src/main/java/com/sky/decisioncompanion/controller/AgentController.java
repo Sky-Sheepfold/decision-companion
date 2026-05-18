@@ -1,5 +1,6 @@
 package com.sky.decisioncompanion.controller;
 
+import cn.dev33.satoken.stp.StpUtil;
 import com.sky.decisioncompanion.common.ChatRequest;
 import com.sky.decisioncompanion.common.ChatResponse;
 import com.sky.decisioncompanion.common.Result;
@@ -31,7 +32,7 @@ public class AgentController {
     @Operation(summary = "普通对话", description = "与通义千问进行普通对话，返回完整的回复内容")
     @ApiResponse(responseCode = "200", description = "对话成功", content = @Content(schema = @Schema(implementation = Result.class)))
     public ResponseEntity<Result<ChatResponse>> chat(@Valid @RequestBody ChatRequest request) {
-        String reply = agentService.chat(request.getSessionId(), request.getMessage());
+        String reply = agentService.chat(StpUtil.getLoginIdAsLong(), request.getMessage());
         ChatResponse data = new ChatResponse(reply);
         return ResponseEntity.ok(Result.success(data));
     }
@@ -39,8 +40,7 @@ public class AgentController {
     @GetMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "流式对话", description = "与通义千问进行流式对话，使用 Server-Sent Events（SSE）")
     public Flux<String> chatStream(
-            @Parameter(description = "会话 ID，用于区分不同的对话会话") @RequestParam String sessionId,
             @Parameter(description = "用户发送的消息内容") @RequestParam String message) {
-        return agentService.chatStream(sessionId, message);
+        return agentService.chatStream(StpUtil.getLoginIdAsLong(), message);
     }
 }
