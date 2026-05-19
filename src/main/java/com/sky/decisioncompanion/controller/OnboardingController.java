@@ -2,9 +2,7 @@ package com.sky.decisioncompanion.controller;
 
 import cn.dev33.satoken.stp.StpUtil;
 import com.sky.decisioncompanion.common.Result;
-import com.sky.decisioncompanion.model.User;
 import com.sky.decisioncompanion.service.OnboardingService;
-import com.sky.decisioncompanion.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -16,7 +14,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/onboarding")
@@ -24,11 +21,9 @@ import java.util.Map;
 public class OnboardingController {
 
     private final OnboardingService onboardingService;
-    private final UserService userService;
 
-    public OnboardingController(OnboardingService onboardingService, UserService userService) {
+    public OnboardingController(OnboardingService onboardingService) {
         this.onboardingService = onboardingService;
-        this.userService = userService;
     }
 
     @GetMapping("/questions")
@@ -51,44 +46,37 @@ public class OnboardingController {
 
     @PostMapping("/answer")
     @Operation(summary = "提交问题答案", description = "处理用户的回答，返回AI的响应")
-    public ResponseEntity<Result<Map<String, Object>>> submitAnswer(
+    public ResponseEntity<Result<OnboardingService.OnboardingStepResult>> submitAnswer(
             @Valid @RequestBody OnboardingAnswerRequest request) {
         Long userId = StpUtil.getLoginIdAsLong();
-        String reply = onboardingService.processAnswer(
+        OnboardingService.OnboardingStepResult result = onboardingService.answerStep(
                 userId,
                 request.step(),
                 request.answer()
         );
 
-        boolean isLastStep = request.step() >= onboardingService.getTotalSteps();
+        return ResponseEntity.ok(Result.success(result));
+    }
 
-        if (isLastStep) {
-            onboardingService.completeOnboarding(userId);
-        }
-
-        return ResponseEntity.ok(Result.success(Map.of(
-                "reply", reply,
-                "isCompleted", isLastStep,
-                "currentStep", request.step(),
-                "totalSteps", onboardingService.getTotalSteps()
-        )));
+    @PostMapping("/skip")
+    @Operation(summary = "跳过当前问题", description = "记录当前问题已跳过，并推进冷启动进度")
+    public ResponseEntity<Result<OnboardingService.OnboardingStepResult>> skipQuestion(
+            @Valid @RequestBody OnboardingSkipRequest request) {
+        Long userId = StpUtil.getLoginIdAsLong();
+        OnboardingService.OnboardingStepResult result = onboardingService.skipStep(userId, request.step());
+        return ResponseEntity.ok(Result.success(result));
     }
 
     @GetMapping("/status")
     @Operation(summary = "获取冷启动状态", description = "检查用户是否已完成冷启动")
-    public ResponseEntity<Result<Map<String, Object>>> getStatus() {
-        User user = userService.getUserById(StpUtil.getLoginIdAsLong());
-        boolean completed = user != null && Boolean.TRUE.equals(user.getOnboarded());
-        int currentStep = completed ? onboardingService.getTotalSteps() : 1;
-
-        return ResponseEntity.ok(Result.success(Map.of(
-                "onboarded", completed,
-                "currentStep", currentStep,
-                "totalSteps", onboardingService.getTotalSteps()
-        )));
+    public ResponseEntity<Result<OnboardingService.OnboardingStatus>> getStatus() {
+        return ResponseEntity.ok(Result.success(onboardingService.getStatus(StpUtil.getLoginIdAsLong())));
     }
 
     public record OnboardingAnswerRequest(
             @Parameter(description = "问题步骤号") @Min(1) @Max(5) int step,
             @Parameter(description = "用户答案") @NotBlank String answer) {}
+
+    public record OnboardingSkipRequest(
+            @Parameter(description = "问题步骤号") @Min(1) @Max(5) int step) {}
 }
