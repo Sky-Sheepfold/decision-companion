@@ -1,0 +1,33 @@
+services:
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/sky-sheepfold/decision-companion-web:latest}
+    environment:
+      BACKEND_UPSTREAM: http://backend:8080
+    ports:
+      - "${FRONTEND_PORT:-30080}:80"
+    depends_on:
+      - backend
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/sky-sheepfold/decision-companion-backend:latest}
+    environment:
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      SERVER_IP: ${MYSQL_HOST:-sky_mysql}
+      DB_PASSWORD: ${DB_PASSWORD}
+      CHROMA_HOST: ${CHROMA_HOST:-chroma}
+      CHROMA_PORT: ${CHROMA_PORT:-8000}
+      SA_TOKEN_JWT_SECRET_KEY: ${SA_TOKEN_JWT_SECRET_KEY}
+      JAVA_OPTS: ${JAVA_OPTS:-}
+    expose:
+      - "8080"
+    networks:
+      - app_network
+    restart: unless-stopped
+
+networks:
+  app_network:
+    external: true
+    name: ${EXTERNAL_DOCKER_NETWORK:-1panel-network}
