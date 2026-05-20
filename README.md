@@ -80,15 +80,19 @@ docker compose up -d
 - MySQL：`localhost:3306`
 - Chroma：`localhost:8000`
 
-MySQL 默认数据库为 `companion`，默认 root 密码为 `companion123`，初始化表结构来自 `init.sql`。
+MySQL 数据库为 `companion`，root 密码从 `DB_PASSWORD` 环境变量读取，初始化表结构来自 `init.sql`。
 
 ### 2. 配置后端环境变量
 
-```bash
-export DASHSCOPE_API_KEY=你的_DashScope_API_Key
-export DB_PASSWORD=companion123
-export CHROMA_HOST=localhost
-export CHROMA_PORT=8000
+后端会自动读取项目根目录的 `.env` 文件，也可以使用系统环境变量覆盖。
+
+```env
+DASHSCOPE_API_KEY=你的_DashScope_API_Key
+SERVER_IP=你的数据库主机
+DB_PASSWORD=你的数据库密码
+CHROMA_HOST=localhost
+CHROMA_PORT=8000
+SA_TOKEN_JWT_SECRET_KEY=请替换为足够长的随机字符串
 ```
 
 ### 3. 启动后端
@@ -132,6 +136,7 @@ VITE_API_BASE_URL=http://localhost:8080/api
 
 ## 主要页面
 
+- `/login`：登录注册页
 - `/onboarding`：冷启动引导页
 - `/chat`：对话主界面
 - `/profile`：用户档案可视化页
@@ -142,18 +147,22 @@ VITE_API_BASE_URL=http://localhost:8080/api
 
 | 模块 | 方法 | 路径 | 说明 |
 | --- | --- | --- | --- |
+| 认证 | `POST` | `/api/auth/register` | 注册账号 |
+| 认证 | `POST` | `/api/auth/login` | 登录账号 |
+| 认证 | `GET` | `/api/auth/me` | 获取当前登录用户 |
+| 认证 | `POST` | `/api/auth/logout` | 退出登录 |
 | 对话 | `POST` | `/api/agent/chat` | 普通阻塞式对话 |
 | 对话 | `GET` | `/api/agent/chat/stream` | SSE 流式对话 |
 | 冷启动 | `GET` | `/api/onboarding/questions` | 获取冷启动问题列表 |
 | 冷启动 | `GET` | `/api/onboarding/questions/{step}` | 获取指定步骤问题 |
 | 冷启动 | `POST` | `/api/onboarding/answer` | 提交冷启动回答 |
-| 冷启动 | `GET` | `/api/onboarding/status/{sessionId}` | 获取冷启动状态 |
-| 档案 | `GET` | `/api/profile/{sessionId}` | 获取完整用户档案 |
-| 档案 | `GET` | `/api/profile/{sessionId}/values` | 获取价值观档案 |
-| 档案 | `GET` | `/api/profile/{sessionId}/decisions` | 获取决策历史 |
-| 档案 | `GET` | `/api/profile/{sessionId}/emotions` | 获取情绪模式 |
-| 档案 | `GET` | `/api/profile/{sessionId}/relationships` | 获取关系图谱 |
-| 档案 | `GET` | `/api/profile/{sessionId}/fears` | 获取恐惧与边界 |
+| 冷启动 | `GET` | `/api/onboarding/status` | 获取冷启动状态 |
+| 档案 | `GET` | `/api/profile` | 获取完整用户档案 |
+| 档案 | `GET` | `/api/profile/values` | 获取价值观档案 |
+| 档案 | `GET` | `/api/profile/decisions` | 获取决策历史 |
+| 档案 | `GET` | `/api/profile/emotions` | 获取情绪模式 |
+| 档案 | `GET` | `/api/profile/relationships` | 获取关系图谱 |
+| 档案 | `GET` | `/api/profile/fears` | 获取恐惧与边界 |
 | Chroma | `GET` | `/api/chroma/collections` | 查看向量库集合 |
 
 ## 数据档案模型

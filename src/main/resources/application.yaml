@@ -1,4 +1,7 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
+
   application:
     name: decision-companion
 
@@ -21,7 +24,7 @@ spring:
         initialize-schema: true
 
   datasource:
-    url: jdbc:mysql://localhost:3306/companion?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://${SERVER_IP}:3306/companion?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -38,7 +41,7 @@ sa-token:
   token-prefix: Bearer
   timeout: 604800
   is-read-cookie: false
-  jwt-secret-key: ${SA_TOKEN_JWT_SECRET_KEY:decision-companion-dev-secret-change-me}
+  jwt-secret-key: ${SA_TOKEN_JWT_SECRET_KEY}
 
 logging:
   level:

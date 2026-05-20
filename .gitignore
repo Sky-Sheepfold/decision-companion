@@ -35,4 +35,9 @@ build/
 docs/
 .trae/
 frontend/
+.codex/
 init.sql
+.DS_Store
+.env
+.env.*
+!.env.example
