@@ -63,7 +63,7 @@
 
 - JDK 17+
 - Maven 3.9+
-- Node.js 18+
+- Node.js 20.19+（或 22.12+ / 24.x；Vite 8 要求）
 - Docker / Docker Compose
 - DashScope API Key
 
