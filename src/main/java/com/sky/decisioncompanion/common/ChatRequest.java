@@ -8,6 +8,9 @@ import lombok.Data;
 @Schema(description = "聊天请求参数")
 public class ChatRequest {
 
+    @Schema(description = "会话ID，不传则创建新会话")
+    private Long conversationId;
+
     @Schema(description = "消息内容")
     @NotBlank(message = "消息内容不能为空")
     private String message;

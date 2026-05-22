@@ -7,6 +7,9 @@ import lombok.Data;
 @Schema(description = "聊天响应数据")
 public class ChatResponse {
 
+    @Schema(description = "会话ID")
+    private Long conversationId;
+
     @Schema(description = "AI 回复内容")
     private String reply;
 
@@ -14,6 +17,11 @@ public class ChatResponse {
     }
 
     public ChatResponse(String reply) {
+        this.reply = reply;
+    }
+
+    public ChatResponse(Long conversationId, String reply) {
+        this.conversationId = conversationId;
         this.reply = reply;
     }
 }

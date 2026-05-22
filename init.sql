@@ -88,3 +88,30 @@ CREATE TABLE IF NOT EXISTS profile_fear (
     updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='恐惧与边界';
+
+-- 聊天会话
+CREATE TABLE IF NOT EXISTS chat_conversation (
+    id            BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id       BIGINT NOT NULL COMMENT '用户ID',
+    title         VARCHAR(100) NOT NULL COMMENT '会话标题',
+    message_count INT NOT NULL DEFAULT 0 COMMENT '消息数量',
+    deleted       BOOLEAN NOT NULL DEFAULT FALSE COMMENT '是否删除',
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_chat_conversation_user_deleted_updated (user_id, deleted, updated_at),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='聊天会话';
+
+-- 聊天消息
+CREATE TABLE IF NOT EXISTS chat_message (
+    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+    conversation_id BIGINT NOT NULL COMMENT '会话ID',
+    user_id         BIGINT NOT NULL COMMENT '用户ID',
+    role            VARCHAR(20) NOT NULL COMMENT '消息角色 user/assistant',
+    content         TEXT NOT NULL COMMENT '消息内容',
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_chat_message_conversation_created (conversation_id, created_at),
+    INDEX idx_chat_message_user_created (user_id, created_at),
+    FOREIGN KEY (conversation_id) REFERENCES chat_conversation(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='聊天消息';
