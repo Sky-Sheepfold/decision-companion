@@ -1,6 +1,8 @@
 package com.sky.decisioncompanion.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.sky.decisioncompanion.common.BusinessException;
+import com.sky.decisioncompanion.common.ResultCode;
 import com.sky.decisioncompanion.model.User;
 import com.sky.decisioncompanion.repository.UserRepository;
 import org.springframework.stereotype.Service;
@@ -38,7 +40,7 @@ public class UserService {
     public void markOnboarded(Long userId) {
         User user = getUserById(userId);
         if (user == null) {
-            throw new IllegalArgumentException("用户不存在");
+            throw new BusinessException(ResultCode.USER_NOT_FOUND);
         }
         user.setOnboarded(true);
         userRepository.updateById(user);

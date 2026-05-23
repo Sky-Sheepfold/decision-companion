@@ -24,29 +24,42 @@ public class Result<T> {
     private LocalDateTime timestamp;
 
     public static <T> Result<T> success(T data) {
-        Result<T> response = new Result<>();
-        response.code = 200;
-        response.message = "Success";
+        return success(ResultCode.SUCCESS, data);
+    }
+
+    public static <T> Result<T> success(ResultCode resultCode, T data) {
+        Result<T> response = create(resultCode.getCode(), resultCode.getMessage());
         response.data = data;
         return response;
     }
 
     public static <T> Result<T> success(String message, T data) {
-        Result<T> response = new Result<>();
-        response.code = 200;
-        response.message = message;
+        Result<T> response = create(ResultCode.SUCCESS.getCode(), message);
         response.data = data;
         return response;
     }
 
+    public static <T> Result<T> error(ResultCode resultCode) {
+        return error(resultCode, resultCode.getMessage());
+    }
+
+    public static <T> Result<T> error(ResultCode resultCode, String message) {
+        return create(resultCode.getCode(), message);
+    }
+
     public static <T> Result<T> error(int code, String message) {
-        Result<T> response = new Result<>();
-        response.code = code;
-        response.message = message;
-        return response;
+        return create(code, message);
     }
 
     public static <T> Result<T> error(String message) {
-        return error(500, message);
+        return error(ResultCode.INTERNAL_ERROR, message);
+    }
+
+    private static <T> Result<T> create(int code, String message) {
+        Result<T> response = new Result<>();
+        response.code = code;
+        response.message = message;
+        response.timestamp = LocalDateTime.now();
+        return response;
     }
 }

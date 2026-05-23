@@ -3,6 +3,7 @@ package com.sky.decisioncompanion.service;
 import com.sky.decisioncompanion.model.OnboardingProgress;
 import com.sky.decisioncompanion.model.User;
 import com.sky.decisioncompanion.repository.OnboardingProgressRepository;
+import com.sky.decisioncompanion.common.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -122,7 +123,7 @@ class OnboardingServiceTest {
     @Test
     void outOfOrderStepIsRejected() {
         assertThatThrownBy(() -> onboardingService.skipStep(USER_ID, 2))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessException.class)
                 .hasMessage("请按当前步骤提交");
 
         verify(progressRepository, never()).insert(any(OnboardingProgress.class));

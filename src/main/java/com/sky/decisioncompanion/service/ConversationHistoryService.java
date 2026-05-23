@@ -1,6 +1,8 @@
 package com.sky.decisioncompanion.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.sky.decisioncompanion.common.BusinessException;
+import com.sky.decisioncompanion.common.ResultCode;
 import com.sky.decisioncompanion.model.ChatConversation;
 import com.sky.decisioncompanion.model.ChatMessage;
 import com.sky.decisioncompanion.repository.ChatConversationRepository;
@@ -111,7 +113,7 @@ public class ConversationHistoryService {
         if (conversation == null
                 || !userId.equals(conversation.getUserId())
                 || Boolean.TRUE.equals(conversation.getDeleted())) {
-            throw new IllegalArgumentException("会话不存在");
+            throw new BusinessException(ResultCode.CONVERSATION_NOT_FOUND);
         }
         return conversation;
     }

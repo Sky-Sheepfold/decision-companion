@@ -2,6 +2,8 @@ package com.sky.decisioncompanion.common;
 
 import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.exception.SaTokenException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -12,39 +14,51 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<Result<Void>> handleBusinessException(BusinessException e) {
+        return errorResponse(e.getHttpStatus(), e.getResultCode(), e.getMessage());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Result<Void>> handleValidationException(MethodArgumentNotValidException e) {
         String message = e.getBindingResult().getFieldErrors().stream()
                 .map(error -> error.getField() + ": " + error.getDefaultMessage())
                 .findFirst()
-                .orElse("参数验证失败");
-        return errorResponse(HttpStatus.BAD_REQUEST, 400, message);
+                .orElse(ResultCode.VALIDATION_FAILED.getMessage());
+        return errorResponse(ResultCode.VALIDATION_FAILED.getHttpStatus(), ResultCode.VALIDATION_FAILED, message);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Result<Void>> handleIllegalArgumentException(IllegalArgumentException e) {
-        return errorResponse(HttpStatus.BAD_REQUEST, 400, e.getMessage());
+        return errorResponse(ResultCode.BAD_REQUEST.getHttpStatus(), ResultCode.BAD_REQUEST, e.getMessage());
     }
 
     @ExceptionHandler(NotLoginException.class)
     public ResponseEntity<Result<Void>> handleNotLoginException(NotLoginException e) {
-        return errorResponse(HttpStatus.UNAUTHORIZED, 401, "请先登录");
+        return errorResponse(ResultCode.UNAUTHORIZED);
     }
 
     @ExceptionHandler(SaTokenException.class)
     public ResponseEntity<Result<Void>> handleSaTokenException(SaTokenException e) {
-        return errorResponse(HttpStatus.UNAUTHORIZED, 401, e.getMessage());
+        return errorResponse(ResultCode.TOKEN_INVALID);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Result<Void>> handleException(Exception e) {
-        return errorResponse(HttpStatus.INTERNAL_SERVER_ERROR, 500, "服务器内部错误: " + e.getMessage());
+        logger.error("Unhandled exception", e);
+        return errorResponse(ResultCode.INTERNAL_ERROR);
     }
 
-    private ResponseEntity<Result<Void>> errorResponse(HttpStatus status, int code, String message) {
+    private ResponseEntity<Result<Void>> errorResponse(ResultCode resultCode) {
+        return errorResponse(resultCode.getHttpStatus(), resultCode, resultCode.getMessage());
+    }
+
+    private ResponseEntity<Result<Void>> errorResponse(HttpStatus status, ResultCode resultCode, String message) {
         return ResponseEntity
                 .status(status)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Result.error(code, message));
+                .body(Result.error(resultCode, message));
     }
 }

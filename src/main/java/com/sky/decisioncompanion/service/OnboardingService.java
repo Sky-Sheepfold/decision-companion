@@ -2,6 +2,8 @@ package com.sky.decisioncompanion.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.sky.decisioncompanion.common.BusinessException;
+import com.sky.decisioncompanion.common.ResultCode;
 import com.sky.decisioncompanion.model.OnboardingProgress;
 import com.sky.decisioncompanion.model.User;
 import com.sky.decisioncompanion.repository.OnboardingProgressRepository;
@@ -99,17 +101,17 @@ public class OnboardingService {
     private void validateCurrentStep(Long userId, int step) {
         OnboardingStatus status = refreshCompletionStatus(userId);
         if (status.onboarded()) {
-            throw new IllegalArgumentException("冷启动已完成");
+            throw new BusinessException(ResultCode.ONBOARDING_COMPLETED);
         }
         if (step != status.currentStep()) {
-            throw new IllegalArgumentException("请按当前步骤提交");
+            throw new BusinessException(ResultCode.ONBOARDING_STEP_MISMATCH);
         }
     }
 
     private OnboardingQuestion requireQuestion(int step) {
         OnboardingQuestion question = getQuestion(step);
         if (question == null) {
-            throw new IllegalArgumentException("步骤不存在");
+            throw new BusinessException(ResultCode.ONBOARDING_STEP_NOT_FOUND);
         }
         return question;
     }
@@ -117,7 +119,7 @@ public class OnboardingService {
     private OnboardingStatus refreshCompletionStatus(Long userId) {
         User user = userService.getUserById(userId);
         if (user == null) {
-            throw new IllegalArgumentException("用户不存在");
+            throw new BusinessException(ResultCode.USER_NOT_FOUND);
         }
 
         ProgressSummary summary = summarizeProgress(userId);

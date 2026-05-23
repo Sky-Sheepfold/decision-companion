@@ -1,6 +1,7 @@
 package com.sky.decisioncompanion.controller;
 
 import com.sky.decisioncompanion.common.Result;
+import com.sky.decisioncompanion.common.ResultCode;
 import com.sky.decisioncompanion.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -29,13 +30,13 @@ public class AuthController {
     @PostMapping("/register")
     @Operation(summary = "注册账号", description = "使用用户名和密码注册，用户名支持中文")
     public ResponseEntity<Result<AuthService.AuthResponse>> register(@Valid @RequestBody AuthRequest request) {
-        return ResponseEntity.ok(Result.success("注册成功", authService.register(request.username(), request.password())));
+        return ResponseEntity.ok(Result.success(ResultCode.REGISTER_SUCCESS, authService.register(request.username(), request.password())));
     }
 
     @PostMapping("/login")
     @Operation(summary = "登录账号", description = "使用用户名和密码登录，返回 Sa-Token JWT")
     public ResponseEntity<Result<AuthService.AuthResponse>> login(@Valid @RequestBody AuthRequest request) {
-        return ResponseEntity.ok(Result.success("登录成功", authService.login(request.username(), request.password())));
+        return ResponseEntity.ok(Result.success(ResultCode.LOGIN_SUCCESS, authService.login(request.username(), request.password())));
     }
 
     @GetMapping("/me")
@@ -48,7 +49,7 @@ public class AuthController {
     @Operation(summary = "退出登录", description = "退出当前 Sa-Token 登录态")
     public ResponseEntity<Result<Void>> logout() {
         authService.logout();
-        return ResponseEntity.ok(Result.success("退出成功", null));
+        return ResponseEntity.ok(Result.success(ResultCode.LOGOUT_SUCCESS, null));
     }
 
     public record AuthRequest(

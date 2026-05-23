@@ -1,7 +1,9 @@
 package com.sky.decisioncompanion.controller;
 
 import cn.dev33.satoken.stp.StpUtil;
+import com.sky.decisioncompanion.common.BusinessException;
 import com.sky.decisioncompanion.common.Result;
+import com.sky.decisioncompanion.common.ResultCode;
 import com.sky.decisioncompanion.service.OnboardingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -38,8 +40,7 @@ public class OnboardingController {
             @Parameter(description = "问题步骤号") @PathVariable @Min(1) @Max(5) int step) {
         OnboardingService.OnboardingQuestion question = onboardingService.getQuestion(step);
         if (question == null) {
-            return ResponseEntity.badRequest()
-                    .body(Result.error("步骤不存在"));
+            throw new BusinessException(ResultCode.ONBOARDING_STEP_NOT_FOUND);
         }
         return ResponseEntity.ok(Result.success(question));
     }

@@ -4,6 +4,7 @@ import com.sky.decisioncompanion.model.ChatConversation;
 import com.sky.decisioncompanion.model.ChatMessage;
 import com.sky.decisioncompanion.repository.ChatConversationRepository;
 import com.sky.decisioncompanion.repository.ChatMessageRepository;
+import com.sky.decisioncompanion.common.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -116,7 +117,7 @@ class ConversationHistoryServiceTest {
         ChatConversation other = existingConversation(2L, "别人的会话");
 
         assertThatThrownBy(() -> service.resolveConversation(USER_ID, other.getId(), "继续聊"))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessException.class)
                 .hasMessage("会话不存在");
     }
 
@@ -157,7 +158,7 @@ class ConversationHistoryServiceTest {
 
         assertThat(service.listConversations(USER_ID, 50)).isEmpty();
         assertThatThrownBy(() -> service.listMessages(USER_ID, conversation.getId()))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessException.class)
                 .hasMessage("会话不存在");
     }
 

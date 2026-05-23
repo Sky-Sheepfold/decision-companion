@@ -1,6 +1,8 @@
 package com.sky.decisioncompanion.service;
 
 import cn.dev33.satoken.stp.StpUtil;
+import com.sky.decisioncompanion.common.BusinessException;
+import com.sky.decisioncompanion.common.ResultCode;
 import com.sky.decisioncompanion.model.User;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -30,14 +32,14 @@ public class AuthService {
         validatePassword(password);
 
         if (userService.getUserByUsername(normalizedUsername) != null) {
-            throw new IllegalArgumentException("用户名已存在");
+            throw new BusinessException(ResultCode.USERNAME_EXISTS);
         }
 
         try {
             User user = userService.createUser(normalizedUsername, passwordEncoder.encode(password));
             return loginUser(user);
         } catch (DuplicateKeyException e) {
-            throw new IllegalArgumentException("用户名已存在");
+            throw new BusinessException(ResultCode.USERNAME_EXISTS);
         }
     }
 
@@ -45,7 +47,7 @@ public class AuthService {
         String normalizedUsername = normalizeUsername(username);
         User user = userService.getUserByUsername(normalizedUsername);
         if (user == null || !passwordEncoder.matches(password, user.getPassword())) {
-            throw new IllegalArgumentException("用户名或密码错误");
+            throw new BusinessException(ResultCode.AUTH_FAILED);
         }
 
         return loginUser(user);
@@ -56,7 +58,7 @@ public class AuthService {
         User user = userService.getUserById(userId);
         if (user == null) {
             StpUtil.logout();
-            throw new IllegalArgumentException("用户不存在");
+            throw new BusinessException(ResultCode.USER_NOT_FOUND);
         }
         return AuthUser.from(user);
     }
@@ -73,23 +75,23 @@ public class AuthService {
     private String normalizeUsername(String username) {
         String normalized = username == null ? "" : username.trim();
         if (normalized.isEmpty()) {
-            throw new IllegalArgumentException("用户名不能为空");
+            throw new BusinessException(ResultCode.USERNAME_EMPTY);
         }
         if (normalized.length() > 50) {
-            throw new IllegalArgumentException("用户名不能超过 50 个字符");
+            throw new BusinessException(ResultCode.USERNAME_TOO_LONG);
         }
         if (UNSUPPORTED_USERNAME_CHARS.matcher(normalized).find()) {
-            throw new IllegalArgumentException("用户名不能包含空白字符、斜杠或反斜杠");
+            throw new BusinessException(ResultCode.USERNAME_UNSUPPORTED_CHARS);
         }
         return normalized;
     }
 
     private void validatePassword(String password) {
         if (password == null || password.length() < MIN_PASSWORD_LENGTH) {
-            throw new IllegalArgumentException("密码至少需要 8 位");
+            throw new BusinessException(ResultCode.PASSWORD_TOO_SHORT);
         }
         if (password.length() > MAX_PASSWORD_LENGTH) {
-            throw new IllegalArgumentException("密码不能超过 72 位");
+            throw new BusinessException(ResultCode.PASSWORD_TOO_LONG);
         }
     }
 
