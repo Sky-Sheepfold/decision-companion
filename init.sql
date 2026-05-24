@@ -50,6 +50,23 @@ CREATE TABLE IF NOT EXISTS profile_decision (
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='决策历史';
 
+-- Agent 工具调用日志
+CREATE TABLE IF NOT EXISTS agent_tool_call_log (
+    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id         BIGINT NOT NULL COMMENT '用户ID',
+    conversation_id BIGINT COMMENT '会话ID',
+    tool_name       VARCHAR(100) NOT NULL COMMENT '工具名称',
+    input_summary   VARCHAR(1000) COMMENT '输入摘要',
+    output_summary  VARCHAR(1000) COMMENT '输出摘要',
+    status          VARCHAR(20) NOT NULL COMMENT '状态：成功/失败/跳过，取值 success/failed/skipped',
+    latency_ms      INT COMMENT '耗时毫秒',
+    error_message   VARCHAR(500) COMMENT '错误信息',
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_agent_tool_user_created (user_id, created_at),
+    INDEX idx_agent_tool_conversation_created (conversation_id, created_at),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent工具调用日志';
+
 -- 档案三：情绪模式
 CREATE TABLE IF NOT EXISTS profile_emotion (
     id           BIGINT PRIMARY KEY AUTO_INCREMENT,

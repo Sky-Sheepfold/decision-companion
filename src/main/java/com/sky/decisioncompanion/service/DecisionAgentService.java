@@ -3,11 +3,16 @@ package com.sky.decisioncompanion.service;
 import com.sky.decisioncompanion.advisor.ProfileAdvisorService;
 import com.sky.decisioncompanion.common.ChatResponse;
 import com.sky.decisioncompanion.model.ChatConversation;
+import com.sky.decisioncompanion.service.agenttool.AgentToolContext;
+import com.sky.decisioncompanion.service.agenttool.DecisionAgentToolService;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+
+import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class DecisionAgentService {
@@ -16,19 +21,22 @@ public class DecisionAgentService {
     private final ProfileAdvisorService profileAdvisorService;
     private final ProfileExtractService profileExtractService;
     private final ConversationHistoryService conversationHistoryService;
+    private final DecisionAgentToolService agentToolService;
 
     public DecisionAgentService(
             ChatClient.Builder builder,
             ChatMemory chatMemory,
             ProfileAdvisorService profileAdvisorService,
             ProfileExtractService profileExtractService,
-            ConversationHistoryService conversationHistoryService) {
+            ConversationHistoryService conversationHistoryService,
+            DecisionAgentToolService agentToolService) {
         this.chatClient = builder
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
         this.profileAdvisorService = profileAdvisorService;
         this.profileExtractService = profileExtractService;
         this.conversationHistoryService = conversationHistoryService;
+        this.agentToolService = agentToolService;
     }
 
     public String chat(Long userId, String userMessage) {
@@ -44,6 +52,8 @@ public class DecisionAgentService {
 
         String reply = chatClient.prompt()
                 .user(fullMessage)
+                .tools(agentToolService)
+                .toolContext(toolContext(userId, conversation.getId(), userMessage))
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, memoryId))
                 .call()
                 .content();
@@ -68,6 +78,8 @@ public class DecisionAgentService {
 
         Flux<String> content = chatClient.prompt()
                 .user(fullMessage)
+                .tools(agentToolService)
+                .toolContext(toolContext(userId, conversation.getId(), userMessage))
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, memoryId))
                 .stream()
                 .content()
@@ -83,11 +95,28 @@ public class DecisionAgentService {
 
     private String withProfileContext(Long userId, String userMessage) {
         String systemPrompt = profileAdvisorService.buildSystemPrompt(userId, userMessage);
-        return systemPrompt + "\n\n用户消息：" + userMessage;
+        return systemPrompt + """
+
+                【可用工具使用原则：】
+                当用户处于重大决策、复盘或多选项比较场景时，可以调用受控工具查询历史决策、长期语义记忆或生成决策矩阵。
+                不要为了普通倾诉强行调用工具。
+                工具结果只是辅助，不代表用户最终意愿。
+                不要基于工具结果直接写入档案或决策记录。
+                单轮对话尽量只调用最必要的工具。
+
+                用户消息：""" + userMessage;
     }
 
     private String conversationMemoryId(Long userId, Long conversationId) {
         return "user:" + userId + ":conversation:" + conversationId;
+    }
+
+    private Map<String, Object> toolContext(Long userId, Long conversationId, String userMessage) {
+        return Map.of(
+                AgentToolContext.USER_ID, userId,
+                AgentToolContext.CONVERSATION_ID, conversationId,
+                AgentToolContext.MESSAGE, userMessage,
+                AgentToolContext.REQUEST_ID, UUID.randomUUID().toString());
     }
 
     public record ChatStreamResult(Long conversationId, Flux<String> content) {
