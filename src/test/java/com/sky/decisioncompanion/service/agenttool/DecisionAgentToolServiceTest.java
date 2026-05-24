@@ -59,7 +59,8 @@ class DecisionAgentToolServiceTest {
         assertThat(result.items().get(0).topic()).isEqualTo("外地 offer");
         assertThat(result.items().get(0).choice()).isEqualTo("接受杭州 offer");
         verify(logService).recordSuccess(eq(USER_ID), eq(CONVERSATION_ID), eq("searchDecisionHistory"),
-                contains("offer 城市 成长"), contains("外地 offer"), anyLong());
+                argThat(summary -> summary.contains("query=offer 城市 成长") && summary.contains("limit=5")),
+                contains("外地 offer"), anyLong());
     }
 
     @Test
@@ -76,7 +77,8 @@ class DecisionAgentToolServiceTest {
         assertThat(result.memories()).isEmpty();
         assertThat(result.message()).contains("向量存储");
         verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("searchSemanticMemory"),
-                contains("我怕离家太远"), contains("向量存储"), anyLong());
+                argThat(summary -> summary.contains("query=我怕离家太远") && summary.contains("topK=5")),
+                contains("向量存储"), anyLong());
     }
 
     @Test
@@ -92,7 +94,9 @@ class DecisionAgentToolServiceTest {
         assertThat(result.memories()).isEmpty();
         assertThat(result.message()).contains("暂时无法");
         verify(logService).recordFailure(eq(USER_ID), eq(CONVERSATION_ID), eq("searchSemanticMemory"),
-                contains("我怕离家太远"), contains("chroma down"), anyLong());
+                argThat(summary -> summary.contains("query=我怕离家太远") && summary.contains("topK=5")),
+                argThat(error -> error.contains("查询长期语义记忆失败") && error.contains("chroma down")),
+                anyLong());
     }
 
     @Test
@@ -130,7 +134,10 @@ class DecisionAgentToolServiceTest {
                 .containsKeys("成长空间", "家庭距离", "稳定性");
         assertThat(result.matrix().get(0).summary()).contains("接受外地 offer");
         verify(logService).recordSuccess(eq(USER_ID), eq(CONVERSATION_ID), eq("generateDecisionMatrix"),
-                contains("是否接受外地 offer"), contains("接受外地 offer"), anyLong());
+                argThat(summary -> summary.contains("topic=是否接受外地 offer")
+                        && summary.contains("options=[接受外地 offer, 留在本地继续找]")
+                        && summary.contains("dimensions=[成长空间, 家庭距离, 稳定性]")),
+                contains("接受外地 offer"), anyLong());
     }
 
     private ToolContext toolContext() {

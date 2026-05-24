@@ -48,12 +48,12 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AsyncRequestNotUsableException.class)
     public void handleAsyncRequestNotUsableException(AsyncRequestNotUsableException e) {
-        logger.debug("Client disconnected before response could be completed", e);
+        logger.debug("客户端在响应完成前已断开连接", e);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Result<Void>> handleException(Exception e) {
-        logger.error("Unhandled exception", e);
+        logger.error("未处理的服务端异常", e);
         return errorResponse(ResultCode.INTERNAL_ERROR);
     }
 

@@ -70,7 +70,7 @@ public class AgentToolCallLogService {
             log.setErrorMessage(truncate(errorMessage, ERROR_MAX_LENGTH));
             repository.insert(log);
         } catch (Exception e) {
-            logger.warn("Agent 工具调用日志写入失败, toolName: {}", toolName, e);
+            logger.warn("Agent 工具调用日志写入失败，工具名：{}", toolName, e);
         }
     }
 

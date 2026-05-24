@@ -75,7 +75,7 @@ public class DecisionAgentToolService {
             return result;
         } catch (Exception e) {
             logService.recordFailure(context.userId(), context.conversationId(), "searchDecisionHistory",
-                    inputSummary, e.getMessage(), elapsedMillis(start));
+                    inputSummary, failureMessage("查询历史决策", e), elapsedMillis(start));
             return new DecisionHistoryToolResult(false, "暂时无法查询历史决策", List.of());
         }
     }
@@ -117,7 +117,7 @@ public class DecisionAgentToolService {
             return result;
         } catch (Exception e) {
             logService.recordFailure(context.userId(), context.conversationId(), "searchSemanticMemory",
-                    inputSummary, e.getMessage(), elapsedMillis(start));
+                    inputSummary, failureMessage("查询长期语义记忆", e), elapsedMillis(start));
             return new SemanticMemoryToolResult(false, "暂时无法查询长期语义记忆", List.of());
         }
     }
@@ -144,7 +144,7 @@ public class DecisionAgentToolService {
             return result;
         } catch (Exception e) {
             logService.recordFailure(context.userId(), context.conversationId(), "generateDecisionMatrix",
-                    inputSummary, e.getMessage(), elapsedMillis(start));
+                    inputSummary, failureMessage("生成决策矩阵", e), elapsedMillis(start));
             return new DecisionMatrixToolResult(false, "暂时无法生成决策矩阵", List.of());
         }
     }
@@ -249,6 +249,14 @@ public class DecisionAgentToolService {
 
     private long elapsedMillis(long start) {
         return (System.nanoTime() - start) / 1_000_000;
+    }
+
+    private String failureMessage(String action, Exception e) {
+        String detail = e.getMessage();
+        if (!StringUtils.hasText(detail)) {
+            return action + "失败";
+        }
+        return action + "失败：" + detail;
     }
 
     public record DecisionHistoryToolResult(boolean available, String message, List<DecisionHistoryItem> items) {
