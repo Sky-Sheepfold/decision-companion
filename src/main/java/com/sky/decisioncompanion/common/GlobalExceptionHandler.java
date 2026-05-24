@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -43,6 +44,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(SaTokenException.class)
     public ResponseEntity<Result<Void>> handleSaTokenException(SaTokenException e) {
         return errorResponse(ResultCode.TOKEN_INVALID);
+    }
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleAsyncRequestNotUsableException(AsyncRequestNotUsableException e) {
+        logger.debug("Client disconnected before response could be completed", e);
     }
 
     @ExceptionHandler(Exception.class)

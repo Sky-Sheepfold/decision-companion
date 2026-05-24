@@ -3,6 +3,11 @@ package com.sky.decisioncompanion.common;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.method.annotation.ExceptionHandlerMethodResolver;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+
+import java.lang.reflect.Method;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,5 +35,18 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getCode()).isEqualTo(ResultCode.INTERNAL_ERROR.getCode());
         assertThat(response.getBody().getMessage()).isEqualTo(ResultCode.INTERNAL_ERROR.getMessage());
+    }
+
+    @Test
+    void clientDisconnectUsesVoidHandlerWithoutWritingErrorResponse() {
+        ExceptionHandlerMethodResolver resolver = new ExceptionHandlerMethodResolver(GlobalExceptionHandler.class);
+
+        Method method = resolver.resolveMethod(new AsyncRequestNotUsableException("ServletOutputStream failed to write"));
+
+        assertThat(method).isNotNull();
+        assertThat(method.getName()).isEqualTo("handleAsyncRequestNotUsableException");
+        assertThat(method.getReturnType()).isEqualTo(Void.TYPE);
+        assertThat(method.getAnnotation(ExceptionHandler.class).value())
+                .containsExactly(AsyncRequestNotUsableException.class);
     }
 }
