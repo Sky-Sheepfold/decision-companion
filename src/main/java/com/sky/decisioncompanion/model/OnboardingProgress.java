@@ -33,7 +33,7 @@ public class OnboardingProgress {
     @Schema(description = "用户回答")
     private String answer;
 
-    @Schema(description = "AI 回复")
+    @Schema(description = "兼容字段：当前冷启动逐题不生成 AI 回复")
     private String reply;
 
     @Schema(description = "创建时间")

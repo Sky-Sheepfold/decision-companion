@@ -7,8 +7,12 @@ import com.sky.decisioncompanion.common.ResultCode;
 import com.sky.decisioncompanion.model.OnboardingProgress;
 import com.sky.decisioncompanion.model.User;
 import com.sky.decisioncompanion.repository.OnboardingProgressRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -16,11 +20,12 @@ import java.util.Set;
 @Service
 public class OnboardingService {
 
+    private static final Logger logger = LoggerFactory.getLogger(OnboardingService.class);
     private static final String STATUS_ANSWERED = "answered";
     private static final String STATUS_SKIPPED = "skipped";
 
     private final UserService userService;
-    private final DecisionAgentService agentService;
+    private final ProfileExtractService profileExtractService;
     private final OnboardingProgressRepository progressRepository;
 
     private static final List<OnboardingQuestion> QUESTIONS = List.of(
@@ -33,10 +38,10 @@ public class OnboardingService {
 
     public OnboardingService(
             UserService userService,
-            DecisionAgentService agentService,
+            ProfileExtractService profileExtractService,
             OnboardingProgressRepository progressRepository) {
         this.userService = userService;
-        this.agentService = agentService;
+        this.profileExtractService = profileExtractService;
         this.progressRepository = progressRepository;
     }
 
@@ -56,21 +61,20 @@ public class OnboardingService {
     }
 
     public OnboardingStepResult answerStep(Long userId, int step, String answer) {
-        validateCurrentStep(userId, step);
-        OnboardingQuestion question = requireQuestion(step);
-        String prompt = String.format(
-                "用户正在完成冷启动问卷。第%d步的问题是：%s\n用户的回答是：%s\n请用温暖、理解的方式回应用户，可以适当追问或总结。",
-                step,
-                question.question(),
-                answer
-        );
+        User user = requireUser(userId);
+        List<OnboardingProgress> progresses = getProgresses(userId);
+        OnboardingStatus currentStatus = refreshCompletionStatus(user, progresses);
 
-        String reply = agentService.chat(userId, prompt);
-        saveProgress(userId, step, STATUS_ANSWERED, answer, reply);
-        OnboardingStatus status = refreshCompletionStatus(userId);
+        validateCurrentStep(currentStatus, step);
+        requireQuestion(step);
+
+        OnboardingProgress progress = saveProgress(userId, step, STATUS_ANSWERED, answer, null, progresses);
+        List<OnboardingProgress> updatedProgresses = withSavedProgress(progresses, progress);
+        OnboardingStatus status = refreshCompletionStatus(user, updatedProgresses);
+        extractInitialProfileIfCompleted(userId, status, updatedProgresses);
 
         return new OnboardingStepResult(
-                reply,
+                null,
                 status.onboarded(),
                 step,
                 nextStepFrom(status),
@@ -79,11 +83,17 @@ public class OnboardingService {
     }
 
     public OnboardingStepResult skipStep(Long userId, int step) {
-        validateCurrentStep(userId, step);
+        User user = requireUser(userId);
+        List<OnboardingProgress> progresses = getProgresses(userId);
+        OnboardingStatus currentStatus = refreshCompletionStatus(user, progresses);
+
+        validateCurrentStep(currentStatus, step);
         requireQuestion(step);
 
-        saveProgress(userId, step, STATUS_SKIPPED, null, null);
-        OnboardingStatus status = refreshCompletionStatus(userId);
+        OnboardingProgress progress = saveProgress(userId, step, STATUS_SKIPPED, null, null, progresses);
+        List<OnboardingProgress> updatedProgresses = withSavedProgress(progresses, progress);
+        OnboardingStatus status = refreshCompletionStatus(user, updatedProgresses);
+        extractInitialProfileIfCompleted(userId, status, updatedProgresses);
 
         return new OnboardingStepResult(
                 null,
@@ -98,14 +108,62 @@ public class OnboardingService {
         return refreshCompletionStatus(userId);
     }
 
-    private void validateCurrentStep(Long userId, int step) {
-        OnboardingStatus status = refreshCompletionStatus(userId);
+    private void validateCurrentStep(OnboardingStatus status, int step) {
         if (status.onboarded()) {
             throw new BusinessException(ResultCode.ONBOARDING_COMPLETED);
         }
         if (step != status.currentStep()) {
             throw new BusinessException(ResultCode.ONBOARDING_STEP_MISMATCH);
         }
+    }
+
+    private void extractInitialProfileIfCompleted(
+            Long userId,
+            OnboardingStatus status,
+            List<OnboardingProgress> progresses) {
+        if (!status.onboarded()) {
+            return;
+        }
+
+        String material = buildInitialProfileMaterial(progresses);
+        if (material.isBlank()) {
+            return;
+        }
+
+        try {
+            logger.info("冷启动完成，触发初始画像提炼, userId: {}, materialLength: {}", userId, material.length());
+            profileExtractService.extractAndSave(userId, material, "");
+        } catch (Exception e) {
+            logger.warn("冷启动初始画像提炼触发失败, userId: {}", userId, e);
+        }
+    }
+
+    private String buildInitialProfileMaterial(List<OnboardingProgress> progresses) {
+        StringBuilder material = new StringBuilder("用户完成冷启动问卷，以下是用户明确填写的回答：\n");
+        int headerLength = material.length();
+        progresses.stream()
+                .filter(progress -> STATUS_ANSWERED.equals(progress.getStatus()))
+                .filter(progress -> progress.getStep() != null)
+                .filter(progress -> progress.getAnswer() != null && !progress.getAnswer().isBlank())
+                .sorted(Comparator.comparing(OnboardingProgress::getStep))
+                .forEach(progress -> {
+                    OnboardingQuestion question = getQuestion(progress.getStep());
+                    if (question == null) {
+                        return;
+                    }
+                    material.append("\n第")
+                            .append(progress.getStep())
+                            .append("步问题：")
+                            .append(question.question())
+                            .append("\n用户回答：")
+                            .append(progress.getAnswer().trim())
+                            .append("\n");
+                });
+
+        if (material.length() == headerLength) {
+            return "";
+        }
+        return material.toString();
     }
 
     private OnboardingQuestion requireQuestion(int step) {
@@ -117,15 +175,23 @@ public class OnboardingService {
     }
 
     private OnboardingStatus refreshCompletionStatus(Long userId) {
+        User user = requireUser(userId);
+        return refreshCompletionStatus(user, getProgresses(userId));
+    }
+
+    private User requireUser(Long userId) {
         User user = userService.getUserById(userId);
         if (user == null) {
             throw new BusinessException(ResultCode.USER_NOT_FOUND);
         }
+        return user;
+    }
 
-        ProgressSummary summary = summarizeProgress(userId);
+    private OnboardingStatus refreshCompletionStatus(User user, List<OnboardingProgress> progresses) {
+        ProgressSummary summary = summarizeProgress(progresses);
         boolean onboarded = Boolean.TRUE.equals(user.getOnboarded());
         if (!onboarded && summary.completedSteps() >= getTotalSteps()) {
-            userService.markOnboarded(userId);
+            userService.markOnboarded(user.getId());
             onboarded = true;
         }
 
@@ -140,8 +206,7 @@ public class OnboardingService {
         );
     }
 
-    private ProgressSummary summarizeProgress(Long userId) {
-        List<OnboardingProgress> progresses = getProgresses(userId);
+    private ProgressSummary summarizeProgress(List<OnboardingProgress> progresses) {
         Set<Integer> completedStepNumbers = new HashSet<>();
         int answeredSteps = 0;
         int skippedSteps = 0;
@@ -188,8 +253,14 @@ public class OnboardingService {
         return status.onboarded() ? getTotalSteps() : status.currentStep();
     }
 
-    private void saveProgress(Long userId, int step, String status, String answer, String reply) {
-        OnboardingProgress progress = getProgresses(userId).stream()
+    private OnboardingProgress saveProgress(
+            Long userId,
+            int step,
+            String status,
+            String answer,
+            String reply,
+            List<OnboardingProgress> progresses) {
+        OnboardingProgress progress = progresses.stream()
                 .filter(item -> item.getStep() != null && item.getStep() == step)
                 .findFirst()
                 .orElseGet(OnboardingProgress::new);
@@ -205,6 +276,29 @@ public class OnboardingService {
         } else {
             progressRepository.updateById(progress);
         }
+        return progress;
+    }
+
+    private List<OnboardingProgress> withSavedProgress(
+            List<OnboardingProgress> progresses,
+            OnboardingProgress savedProgress) {
+        List<OnboardingProgress> updatedProgresses = new ArrayList<>();
+        boolean replaced = false;
+
+        for (OnboardingProgress progress : progresses) {
+            if (progress.getStep() != null && progress.getStep().equals(savedProgress.getStep())) {
+                updatedProgresses.add(savedProgress);
+                replaced = true;
+            } else {
+                updatedProgresses.add(progress);
+            }
+        }
+
+        if (!replaced) {
+            updatedProgresses.add(savedProgress);
+        }
+
+        return updatedProgresses;
     }
 
     public record OnboardingQuestion(int step, String type, String question) {}

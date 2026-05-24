@@ -46,7 +46,7 @@ public class OnboardingController {
     }
 
     @PostMapping("/answer")
-    @Operation(summary = "提交问题答案", description = "处理用户的回答，返回AI的响应")
+    @Operation(summary = "提交问题答案", description = "记录用户回答并推进冷启动进度；完成冷启动后后台触发一次初始画像提炼")
     public ResponseEntity<Result<OnboardingService.OnboardingStepResult>> submitAnswer(
             @Valid @RequestBody OnboardingAnswerRequest request) {
         Long userId = StpUtil.getLoginIdAsLong();

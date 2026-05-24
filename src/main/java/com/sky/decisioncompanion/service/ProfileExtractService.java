@@ -78,7 +78,8 @@ public class ProfileExtractService {
                     .call()
                     .content();
 
-            saveAnalysis(userId, userMessage, analysis);
+            int savedCount = saveAnalysis(userId, userMessage, analysis);
+            logger.info("档案提炼完成, userId: {}, savedCount: {}", userId, savedCount);
         } catch (Exception e) {
             logger.error("档案提炼失败, userId: {}", userId, e);
         }
