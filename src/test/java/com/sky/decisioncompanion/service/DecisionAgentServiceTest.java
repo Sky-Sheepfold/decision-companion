@@ -31,6 +31,8 @@ class DecisionAgentServiceTest {
     private final ProfileExtractService profileExtractService = mock(ProfileExtractService.class);
     private final ConversationHistoryService conversationHistoryService = mock(ConversationHistoryService.class);
     private final DecisionAgentToolService toolService = mock(DecisionAgentToolService.class);
+    private final com.sky.decisioncompanion.service.agenttool.AgentToolInvocationTracker toolInvocationTracker =
+            mock(com.sky.decisioncompanion.service.agenttool.AgentToolInvocationTracker.class);
     private final ChatClient chatClient = mock(ChatClient.class);
     private final ChatClient.ChatClientRequestSpec requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
     private final ChatClient.CallResponseSpec callResponseSpec = mock(ChatClient.CallResponseSpec.class);
@@ -43,6 +45,7 @@ class DecisionAgentServiceTest {
         when(builder.defaultAdvisors(any(Advisor.class))).thenReturn(builder);
         when(builder.build()).thenReturn(chatClient);
         when(chatClient.prompt()).thenReturn(requestSpec);
+        when(requestSpec.system(anyString())).thenReturn(requestSpec);
         when(requestSpec.user(anyString())).thenReturn(requestSpec);
         when(requestSpec.tools(any())).thenReturn(requestSpec);
         when(requestSpec.toolContext(anyMap())).thenReturn(requestSpec);
@@ -66,7 +69,8 @@ class DecisionAgentServiceTest {
                 profileAdvisorService,
                 profileExtractService,
                 conversationHistoryService,
-                toolService);
+                toolService,
+                toolInvocationTracker);
     }
 
     @Test
@@ -80,6 +84,37 @@ class DecisionAgentServiceTest {
     }
 
     @Test
+    void chatPlacesProfileToolRulesInSystemRoleAndKeepsUserMessageClean() {
+        service.chat(USER_ID, null, "我在纠结 offer");
+
+        ArgumentCaptor<String> systemCaptor = ArgumentCaptor.forClass(String.class);
+        verify(requestSpec).system(systemCaptor.capture());
+        String systemPrompt = systemCaptor.getValue();
+
+        assertThat(systemPrompt).contains("用户价值观上下文");
+        assertThat(systemPrompt).contains("必须先调用 updateUserProfile");
+        assertThat(systemPrompt).contains("长期稳定偏好");
+        verify(requestSpec).user("我在纠结 offer");
+        assertThat(systemPrompt).doesNotContain("用户消息：我在纠结 offer");
+    }
+
+    @Test
+    void chatRunsPostChatProfileExtractionAsComplement() {
+        service.chat(USER_ID, null, "我在纠结 offer");
+
+        verify(profileExtractService).extractAndSave(USER_ID, "我在纠结 offer", "我们先一起拆开看。");
+    }
+
+    @Test
+    void chatTracksWhetherUpdateUserProfileWasCalledForRequestId() {
+        service.chat(USER_ID, null, "我在纠结 offer");
+
+        String requestId = assertToolContextWasPassed();
+        verify(toolInvocationTracker).wasCalled(requestId, "updateUserProfile");
+        verify(toolInvocationTracker).clear(requestId);
+    }
+
+    @Test
     void chatStreamRegistersControlledToolsWithBackendContext() {
         DecisionAgentService.ChatStreamResult result = service.chatStream(USER_ID, null, "我在纠结 offer");
 
@@ -89,8 +124,17 @@ class DecisionAgentServiceTest {
         assertToolContextWasPassed();
     }
 
+    @Test
+    void chatStreamRunsPostChatProfileExtractionAsComplement() {
+        DecisionAgentService.ChatStreamResult result = service.chatStream(USER_ID, null, "我在纠结 offer");
+
+        result.content().collectList().block();
+
+        verify(profileExtractService).extractAndSave(USER_ID, "我在纠结 offer", "我们看看");
+    }
+
     @SuppressWarnings("unchecked")
-    private void assertToolContextWasPassed() {
+    private String assertToolContextWasPassed() {
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
         verify(requestSpec).toolContext(captor.capture());
         Map<String, Object> context = captor.getValue();
@@ -100,5 +144,6 @@ class DecisionAgentServiceTest {
                 .containsEntry(AgentToolContext.MESSAGE, "我在纠结 offer");
         assertThat(context.get(AgentToolContext.REQUEST_ID)).isInstanceOf(String.class);
         assertThat((String) context.get(AgentToolContext.REQUEST_ID)).isNotBlank();
+        return (String) context.get(AgentToolContext.REQUEST_ID);
     }
 }

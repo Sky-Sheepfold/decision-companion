@@ -68,14 +68,14 @@ class ProfileExtractServiceTest {
     }
 
     @Test
-    void skipsLowConfidenceValuesAndFearsWithoutWritingVectorMemory() {
+    void skipsProfilesBelowAutoWriteThresholdWithoutWritingVectorMemory() {
         String analysis = """
                 {
                   "values": [
                     {
                       "item": "稳定",
                       "preference": "更想要稳定",
-                      "confidence": 0.59,
+                      "confidence": 0.84,
                       "evidence": ["我更想要稳定"]
                     }
                   ],
@@ -83,7 +83,7 @@ class ProfileExtractServiceTest {
                     {
                       "type": "fear",
                       "description": "害怕失败",
-                      "confidence": 0.69,
+                      "confidence": 0.89,
                       "evidence": ["我怕失败"]
                     }
                   ]
@@ -95,6 +95,30 @@ class ProfileExtractServiceTest {
         assertThat(saved).isZero();
         verify(valuesRepository, never()).insert(any(ProfileValues.class));
         verify(valuesRepository, never()).updateById(any(ProfileValues.class));
+        verify(fearRepository, never()).insert(any(ProfileFear.class));
+        verify(fearRepository, never()).updateById(any(ProfileFear.class));
+        verifyNoInteractions(vectorStore);
+    }
+
+    @Test
+    void skipsMediumConfidenceSensitiveProfileThatNeedsConfirmation() {
+        String analysis = """
+                {
+                  "fears": [
+                    {
+                      "type": "fear",
+                      "description": "失去对生活节奏的掌控",
+                      "manifestation": "未明确描述具体表现",
+                      "confidence": 0.85,
+                      "evidence": ["失去对生活节奏的掌控"]
+                    }
+                  ]
+                }
+                """;
+
+        int saved = service.saveAnalysis(USER_ID, "我担心失去对生活节奏的掌控", analysis);
+
+        assertThat(saved).isZero();
         verify(fearRepository, never()).insert(any(ProfileFear.class));
         verify(fearRepository, never()).updateById(any(ProfileFear.class));
         verifyNoInteractions(vectorStore);
@@ -117,7 +141,7 @@ class ProfileExtractServiceTest {
                     {
                       "item": " 稳定 ",
                       "preference": "更看重长期确定性",
-                      "confidence": 0.65,
+                      "confidence": 0.90,
                       "evidence": ["我还是想稳定一点"]
                     }
                   ]
@@ -133,7 +157,7 @@ class ProfileExtractServiceTest {
         ProfileValues updated = captor.getValue();
         assertThat(updated.getId()).isEqualTo(15L);
         assertThat(updated.getPreference()).isEqualTo("更看重长期确定性");
-        assertThat(updated.getConfidence()).isEqualByComparingTo("0.70");
+        assertThat(updated.getConfidence()).isEqualByComparingTo("0.90");
         assertThat(updated.getEvidence()).contains("我还是想稳定一点");
         verify(vectorStore).add(argThat(documents -> containsProfileRecordCount(documents, 1)));
     }
@@ -178,7 +202,7 @@ class ProfileExtractServiceTest {
                     {
                       "item": "自由度",
                       "preference": "希望保留自主安排时间的空间",
-                      "confidence": 0.8,
+                      "confidence": 0.90,
                       "evidence": ["我不想每天被排满"]
                     }
                   ]

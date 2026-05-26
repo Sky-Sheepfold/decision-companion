@@ -1,7 +1,12 @@
 package com.sky.decisioncompanion.service.agenttool;
 
 import com.sky.decisioncompanion.model.ProfileDecision;
+import com.sky.decisioncompanion.model.ProfileValues;
 import com.sky.decisioncompanion.repository.ProfileDecisionRepository;
+import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
+import com.sky.decisioncompanion.repository.ProfileFearRepository;
+import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
+import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -12,11 +17,13 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -30,16 +37,39 @@ class DecisionAgentToolServiceTest {
     private ProfileDecisionRepository decisionRepository;
 
     @Mock
+    private ProfileValuesRepository valuesRepository;
+
+    @Mock
+    private ProfileEmotionRepository emotionRepository;
+
+    @Mock
+    private ProfileRelationshipRepository relationshipRepository;
+
+    @Mock
+    private ProfileFearRepository fearRepository;
+
+    @Mock
     private VectorStore vectorStore;
 
     @Mock
     private AgentToolCallLogService logService;
 
+    @Mock
+    private AgentToolInvocationTracker toolInvocationTracker;
+
     private DecisionAgentToolService service;
 
     @BeforeEach
     void setUp() {
-        service = new DecisionAgentToolService(decisionRepository, vectorStore, logService);
+        service = new DecisionAgentToolService(
+                decisionRepository,
+                valuesRepository,
+                emotionRepository,
+                relationshipRepository,
+                fearRepository,
+                vectorStore,
+                logService,
+                toolInvocationTracker);
     }
 
     @Test
@@ -66,7 +96,15 @@ class DecisionAgentToolServiceTest {
     @Test
     void searchSemanticMemoryReturnsUnavailableWhenVectorStoreIsMissing() {
         DecisionAgentToolService serviceWithoutVectorStore =
-                new DecisionAgentToolService(decisionRepository, null, logService);
+                new DecisionAgentToolService(
+                        decisionRepository,
+                        valuesRepository,
+                        emotionRepository,
+                        relationshipRepository,
+                        fearRepository,
+                        null,
+                        logService,
+                        toolInvocationTracker);
 
         DecisionAgentToolService.SemanticMemoryToolResult result = serviceWithoutVectorStore.searchSemanticMemory(
                 "我怕离家太远",
@@ -140,11 +178,130 @@ class DecisionAgentToolServiceTest {
                 contains("接受外地 offer"), anyLong());
     }
 
+    @Test
+    void updateUserProfileUpdatesCurrentUsersValueCorrection() {
+        ProfileValues currentUserValue = new ProfileValues();
+        currentUserValue.setId(10L);
+        currentUserValue.setUserId(USER_ID);
+        currentUserValue.setItem("城市偏好");
+        currentUserValue.setPreference("更向往大城市机会");
+        currentUserValue.setConfidence(new BigDecimal("0.70"));
+
+        ProfileValues anotherUserValue = new ProfileValues();
+        anotherUserValue.setId(20L);
+        anotherUserValue.setUserId(2L);
+        anotherUserValue.setItem("城市偏好");
+        anotherUserValue.setPreference("留在本地");
+        anotherUserValue.setConfidence(new BigDecimal("0.90"));
+
+        when(valuesRepository.selectList(any())).thenReturn(List.of(anotherUserValue, currentUserValue));
+
+        DecisionAgentToolService.UpdateUserProfileToolResult result = service.updateUserProfile(
+                "value",
+                "城市偏好",
+                "其实我更偏向离家近的城市",
+                null,
+                0.95,
+                List.of("其实我更偏向离家近的城市"),
+                correctedToolContext());
+
+        assertThat(result.updated()).isTrue();
+        assertThat(result.profileType()).isEqualTo("value");
+        assertThat(result.subject()).isEqualTo("城市偏好");
+        assertThat(currentUserValue.getPreference()).isEqualTo("其实我更偏向离家近的城市");
+        assertThat(currentUserValue.getConfidence()).isEqualByComparingTo("0.95");
+        assertThat(currentUserValue.getEvidence()).contains("离家近");
+        verify(valuesRepository).updateById(currentUserValue);
+        verify(logService).recordSuccess(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
+                argThat(summary -> summary.contains("profileType=value")
+                        && summary.contains("subject=城市偏好")),
+                contains("written value:城市偏好"), anyLong());
+    }
+
+    @Test
+    void updateUserProfileWritesHighConfidenceProfileWhenAgentTriggers() {
+        when(valuesRepository.selectList(any())).thenReturn(List.of());
+
+        DecisionAgentToolService.UpdateUserProfileToolResult result = service.updateUserProfile(
+                "value",
+                "城市偏好",
+                "更偏向离家近的城市",
+                null,
+                0.95,
+                List.of("我怕离家太远"),
+                toolContext());
+
+        assertThat(result.updated()).isTrue();
+        assertThat(result.action()).isEqualTo("written");
+
+        var valueCaptor = org.mockito.ArgumentCaptor.forClass(ProfileValues.class);
+        verify(valuesRepository).insert(valueCaptor.capture());
+        ProfileValues saved = valueCaptor.getValue();
+        assertThat(saved.getUserId()).isEqualTo(USER_ID);
+        assertThat(saved.getItem()).isEqualTo("城市偏好");
+        assertThat(saved.getPreference()).isEqualTo("更偏向离家近的城市");
+        assertThat(saved.getEvidence()).contains("离家太远");
+        verify(logService).recordSuccess(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
+                contains("profileType=value"),
+                contains("written value:城市偏好"), anyLong());
+        verify(toolInvocationTracker).markCalled("req-1", "updateUserProfile");
+    }
+
+    @Test
+    void updateUserProfileAsksConfirmationForMediumConfidenceProfile() {
+        DecisionAgentToolService.UpdateUserProfileToolResult result = service.updateUserProfile(
+                "value",
+                "城市偏好",
+                "更偏向离家近的城市",
+                null,
+                0.70,
+                List.of("我怕离家太远"),
+                toolContext());
+
+        assertThat(result.updated()).isFalse();
+        assertThat(result.action()).isEqualTo("needs_confirmation");
+        assertThat(result.message()).contains("确认");
+        verify(valuesRepository, never()).insert(any(ProfileValues.class));
+        verify(valuesRepository, never()).updateById(any(ProfileValues.class));
+        verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
+                contains("profileType=value"),
+                contains("needs_confirmation"), anyLong());
+    }
+
+    @Test
+    void updateUserProfileSkipsLowConfidenceProfile() {
+        DecisionAgentToolService.UpdateUserProfileToolResult result = service.updateUserProfile(
+                "value",
+                "城市偏好",
+                "更偏向离家近的城市",
+                null,
+                0.40,
+                List.of("我怕离家太远"),
+                toolContext());
+
+        assertThat(result.updated()).isFalse();
+        assertThat(result.action()).isEqualTo("skipped");
+        assertThat(result.message()).contains("置信度");
+        verify(valuesRepository, never()).insert(any(ProfileValues.class));
+        verify(valuesRepository, never()).updateById(any(ProfileValues.class));
+        verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
+                contains("profileType=value"),
+                contains("confidence too low"), anyLong());
+    }
+
     private ToolContext toolContext() {
         return new ToolContext(Map.of(
                 AgentToolContext.USER_ID, USER_ID,
                 AgentToolContext.CONVERSATION_ID, CONVERSATION_ID,
                 AgentToolContext.MESSAGE, "我正在考虑是否接受外地 offer",
+                AgentToolContext.REQUEST_ID, "req-1"));
+    }
+
+    private ToolContext correctedToolContext() {
+        return new ToolContext(Map.of(
+                AgentToolContext.USER_ID, USER_ID,
+                AgentToolContext.CONVERSATION_ID, CONVERSATION_ID,
+                AgentToolContext.MESSAGE, "你刚才理解不对，城市偏好请更新成其实我更偏向离家近的城市",
                 AgentToolContext.REQUEST_ID, "req-1"));
     }
 

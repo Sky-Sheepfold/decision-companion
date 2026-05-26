@@ -68,7 +68,10 @@ public class AgentToolCallLogService {
             log.setStatus(status);
             log.setLatencyMs((int) Math.min(Math.max(latencyMs, 0), Integer.MAX_VALUE));
             log.setErrorMessage(truncate(errorMessage, ERROR_MAX_LENGTH));
-            repository.insert(log);
+            int rows = repository.insert(log);
+            logger.info("Agent 工具调用日志已写入, toolName: {}, status: {}, userId: {}, conversationId: {}, latencyMs: {}, rows: {}",
+                    log.getToolName(), log.getStatus(), log.getUserId(), log.getConversationId(),
+                    log.getLatencyMs(), rows);
         } catch (Exception e) {
             logger.warn("Agent 工具调用日志写入失败，工具名：{}", toolName, e);
         }

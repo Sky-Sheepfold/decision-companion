@@ -7,6 +7,7 @@ import com.sky.decisioncompanion.model.*;
 import com.sky.decisioncompanion.repository.*;
 import com.sky.decisioncompanion.service.profile.ProfileAnalysisParser;
 import com.sky.decisioncompanion.service.profile.ProfileAnalysisParser.Analysis;
+import com.sky.decisioncompanion.service.profile.ProfileWritePolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -30,8 +31,6 @@ import java.util.Map;
 public class ProfileExtractService {
 
     private static final Logger logger = LoggerFactory.getLogger(ProfileExtractService.class);
-    private static final BigDecimal MIN_VALUE_CONFIDENCE = new BigDecimal("0.60");
-    private static final BigDecimal MIN_FEAR_CONFIDENCE = new BigDecimal("0.70");
     private static final List<String> DECISION_KEYWORDS = List.of(
             "决定", "决策", "选择", "纠结", "要不要", "offer", "离职", "转行", "工作", "城市", "学校");
 
@@ -99,9 +98,9 @@ public class ProfileExtractService {
                 JSON 结构如下：
                 {
                     "values": [{"item": "价值观维度", "preference": "倾向描述", "confidence": 0.8, "evidence": ["证据短句"]}],
-                    "emotions": [{"emotion": "情绪类型", "behavior": "行为表现", "trigger": "触发场景", "evidence": ["证据短句"]}],
+                    "emotions": [{"emotion": "情绪类型", "behavior": "行为表现", "trigger": "触发场景", "confidence": 0.8, "evidence": ["证据短句"]}],
                     "decisions": [{"topic": "决策主题", "choice": "选择", "reason": "原因", "evidence": ["证据短句"]}],
-                    "relationships": [{"name": "关系人", "role": "角色", "influenceLevel": "高/中/低", "influenceStyle": "影响方式", "note": "备注", "evidence": ["证据短句"]}],
+                    "relationships": [{"name": "关系人", "role": "角色", "influenceLevel": "高/中/低", "influenceStyle": "影响方式", "note": "备注", "confidence": 0.8, "evidence": ["证据短句"]}],
                     "fears": [{"type": "fear/boundary", "description": "描述", "manifestation": "表现", "boundaryType": "hard/soft", "confidence": 0.7, "evidence": ["证据短句"]}]
                 }
                 """.formatted(userMessage, aiResponse);
@@ -142,7 +141,9 @@ public class ProfileExtractService {
                 String item = truncate(field(value, "item"), 100);
                 String preference = truncate(field(value, "preference"), 200);
                 BigDecimal confidence = decimal(value, "confidence", "0");
-                if (item.isBlank() || preference.isBlank() || confidence.compareTo(MIN_VALUE_CONFIDENCE) < 0) {
+                if (item.isBlank()
+                        || preference.isBlank()
+                        || !shouldAutoWriteProfile(userId, "value", item, confidence)) {
                     continue;
                 }
 
@@ -179,7 +180,10 @@ public class ProfileExtractService {
                 String emotionName = truncate(field(emotion, "emotion"), 100);
                 String behavior = truncate(field(emotion, "behavior"), 500);
                 String trigger = truncate(field(emotion, "trigger", "triggerDesc", "trigger_desc"), 200);
-                if (emotionName.isBlank() || behavior.isBlank()) {
+                BigDecimal confidence = decimal(emotion, "confidence", "0");
+                if (emotionName.isBlank()
+                        || behavior.isBlank()
+                        || !shouldAutoWriteProfile(userId, "emotion", emotionName, confidence)) {
                     continue;
                 }
 
@@ -261,6 +265,10 @@ public class ProfileExtractService {
                 if (influenceStyle.isBlank()) {
                     influenceStyle = rawInfluence;
                 }
+                BigDecimal confidence = decimal(relationship, "confidence", "0");
+                if (!shouldAutoWriteProfile(userId, "relationship", name, confidence)) {
+                    continue;
+                }
                 String note = truncate(defaultIfBlank(field(relationship, "note"), evidenceSummary(relationship)), 500);
 
                 ProfileRelationship existing = findRelationship(userId, name);
@@ -297,13 +305,13 @@ public class ProfileExtractService {
                 String description = truncate(field(fear, "description"), 500);
                 BigDecimal confidence = decimal(fear, "confidence", "0");
                 String evidence = evidenceJson(fear);
+                String type = normalizeFearType(field(fear, "type"));
                 if (description.isBlank()
-                        || confidence.compareTo(MIN_FEAR_CONFIDENCE) < 0
+                        || !shouldAutoWriteProfile(userId, type, description, confidence)
                         || "[]".equals(evidence)) {
                     continue;
                 }
 
-                String type = normalizeFearType(field(fear, "type"));
                 ProfileFear existing = findFear(userId, type, description);
                 if (existing == null) {
                     ProfileFear profile = new ProfileFear();
@@ -330,6 +338,16 @@ public class ProfileExtractService {
             logger.error("恐惧提取失败, userId: {}", userId, e);
         }
         return savedCount;
+    }
+
+    private boolean shouldAutoWriteProfile(Long userId, String profileType, String subject, BigDecimal confidence) {
+        ProfileWritePolicy.Decision decision = ProfileWritePolicy.decide(profileType, confidence);
+        if (!decision.writable()) {
+            logger.info("自动提炼跳过画像写入, userId: {}, profileType: {}, subject: {}, action: {}, reason: {}",
+                    userId, profileType, subject, decision.action(), decision.logSummary());
+            return false;
+        }
+        return true;
     }
 
     private void saveToVectorStore(Long userId, String userMessage, Analysis analysis, int savedCount) {
