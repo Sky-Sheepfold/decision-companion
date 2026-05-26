@@ -2,6 +2,9 @@ package com.sky.decisioncompanion.controller;
 
 import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sky.decisioncompanion.common.Result;
 import com.sky.decisioncompanion.model.*;
 import com.sky.decisioncompanion.repository.*;
@@ -13,6 +16,9 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -27,6 +33,7 @@ public class ProfileController {
     private final ProfileEmotionRepository emotionRepository;
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ProfileController(
             UserService userService,
@@ -50,7 +57,7 @@ public class ProfileController {
         return ResponseEntity.ok(Result.success(Map.of(
                 "user", userService.getUserById(userId),
                 "values", getValuesByUserId(userId),
-                "decisions", getDecisionsByUserId(userId),
+                "decisions", getDecisionResponsesByUserId(userId),
                 "emotions", getEmotionsByUserId(userId),
                 "relationships", getRelationshipsByUserId(userId),
                 "fears", getFearsByUserId(userId)
@@ -71,8 +78,8 @@ public class ProfileController {
 
     @GetMapping("/decisions")
     @Operation(summary = "获取决策历史", description = "返回当前用户的决策历史")
-    public ResponseEntity<Result<List<ProfileDecision>>> getDecisions() {
-        return ResponseEntity.ok(Result.success(getDecisionsByUserId(currentUserId())));
+    public ResponseEntity<Result<List<ProfileDecisionResponse>>> getDecisions() {
+        return ResponseEntity.ok(Result.success(getDecisionResponsesByUserId(currentUserId())));
     }
 
     @GetMapping("/emotions")
@@ -105,6 +112,65 @@ public class ProfileController {
         return decisionRepository.selectList(new LambdaQueryWrapper<ProfileDecision>().eq(ProfileDecision::getUserId, userId));
     }
 
+    private List<ProfileDecisionResponse> getDecisionResponsesByUserId(Long userId) {
+        return getDecisionsByUserId(userId).stream()
+                .map(this::toDecisionResponse)
+                .toList();
+    }
+
+    private ProfileDecisionResponse toDecisionResponse(ProfileDecision decision) {
+        return new ProfileDecisionResponse(
+                decision.getId(),
+                decision.getUserId(),
+                decision.getTopic(),
+                decision.getChoice(),
+                decision.getReason(),
+                decision.getOutcome(),
+                decision.getSatisfaction(),
+                parseTags(decision.getTags()),
+                decision.getDecisionDate(),
+                decision.getCreatedAt()
+        );
+    }
+
+    private List<String> parseTags(String tags) {
+        if (tags == null || tags.isBlank()) {
+            return List.of();
+        }
+
+        try {
+            JsonNode node = objectMapper.readTree(tags);
+            if (node.isArray()) {
+                List<String> parsedTags = new ArrayList<>();
+                node.forEach(item -> {
+                    if (item.isTextual()) {
+                        parsedTags.add(item.asText());
+                    } else if (!item.isNull()) {
+                        parsedTags.add(item.toString());
+                    }
+                });
+                return parsedTags;
+            }
+            if (node.isTextual()) {
+                return splitTags(node.asText());
+            }
+        } catch (JsonProcessingException ignored) {
+            return splitTags(tags);
+        }
+
+        return List.of();
+    }
+
+    private List<String> splitTags(String tags) {
+        if (tags == null || tags.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(tags.split("[,，、]+"))
+                .map(String::trim)
+                .filter(tag -> !tag.isBlank())
+                .toList();
+    }
+
     private List<ProfileEmotion> getEmotionsByUserId(Long userId) {
         return emotionRepository.selectList(new LambdaQueryWrapper<ProfileEmotion>().eq(ProfileEmotion::getUserId, userId));
     }
@@ -115,5 +181,19 @@ public class ProfileController {
 
     private List<ProfileFear> getFearsByUserId(Long userId) {
         return fearRepository.selectList(new LambdaQueryWrapper<ProfileFear>().eq(ProfileFear::getUserId, userId));
+    }
+
+    public record ProfileDecisionResponse(
+            Long id,
+            Long userId,
+            String topic,
+            String choice,
+            String reason,
+            String outcome,
+            Integer satisfaction,
+            List<String> tags,
+            String decisionDate,
+            LocalDateTime createdAt
+    ) {
     }
 }
