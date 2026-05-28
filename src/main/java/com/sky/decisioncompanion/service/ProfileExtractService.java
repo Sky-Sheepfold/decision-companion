@@ -33,6 +33,9 @@ public class ProfileExtractService {
     private static final Logger logger = LoggerFactory.getLogger(ProfileExtractService.class);
     private static final List<String> DECISION_KEYWORDS = List.of(
             "决定", "决策", "选择", "纠结", "要不要", "offer", "离职", "转行", "工作", "城市", "学校");
+    private static final String VECTOR_MEMORY_TYPE = "conversation_scene";
+    private static final String VECTOR_MEMORY_ROLE = "scene_evidence";
+    private static final String VECTOR_MEMORY_SOURCE = "profile_extract";
 
     private final ChatClient chatClient;
     private final ProfileValuesRepository valuesRepository;
@@ -359,11 +362,13 @@ public class ProfileExtractService {
         try {
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("userId", String.valueOf(userId));
-            metadata.put("type", "conversation_analysis");
+            metadata.put("type", VECTOR_MEMORY_TYPE);
+            metadata.put("memoryRole", VECTOR_MEMORY_ROLE);
+            metadata.put("source", VECTOR_MEMORY_SOURCE);
             metadata.put("profileRecordCount", savedCount);
 
             Document document = new Document(
-                    buildVectorSummary(userId, userMessage, analysis, savedCount),
+                    buildSceneMemorySummary(userMessage, analysis, savedCount),
                     metadata);
             vectorStore.add(java.util.List.of(document));
         } catch (Exception e) {
@@ -575,34 +580,91 @@ public class ProfileExtractService {
         return cleanedReason + "\n证据：" + cleanedEvidence;
     }
 
-    private String buildVectorSummary(Long userId, String userMessage, Analysis analysis, int savedCount) {
+    private String buildSceneMemorySummary(String userMessage, Analysis analysis, int savedCount) {
         return """
-                用户ID: %s
-                本轮用户消息: %s
+                场景记忆（用于相似情境召回，不作为结构化画像结论）
+                用户表达: %s
+                关键证据: %s
+                关联画像类型: %s
+                场景线索: %s
                 有效档案更新数: %d
-                价值观: %s
-                情绪模式: %s
-                决策: %s
-                关系: %s
-                恐惧与边界: %s
                 """.formatted(
-                userId,
-                userMessage,
-                savedCount,
-                summarizeNodes(analysis.values(), "item", "preference"),
-                summarizeNodes(analysis.emotions(), "emotion", "behavior"),
-                summarizeNodes(analysis.decisions(), "topic", "choice"),
-                summarizeNodes(analysis.relationships(), "name", "role"),
-                summarizeNodes(analysis.fears(), "type", "description"));
+                truncate(userMessage, 500),
+                summarizeEvidence(analysis),
+                summarizeProfileTypes(analysis),
+                summarizeSceneSignals(analysis),
+                savedCount);
     }
 
-    private String summarizeNodes(List<JsonNode> nodes, String firstKey, String secondKey) {
-        if (nodes.isEmpty()) {
+    private String summarizeProfileTypes(Analysis analysis) {
+        List<String> types = new ArrayList<>();
+        if (!analysis.values().isEmpty()) {
+            types.add("values");
+        }
+        if (!analysis.emotions().isEmpty()) {
+            types.add("emotions");
+        }
+        if (!analysis.decisions().isEmpty()) {
+            types.add("decisions");
+        }
+        if (!analysis.relationships().isEmpty()) {
+            types.add("relationships");
+        }
+        if (!analysis.fears().isEmpty()) {
+            types.add("fears");
+        }
+        if (types.isEmpty()) {
             return "[]";
         }
-        return nodes.stream()
-                .map(node -> field(node, firstKey) + ":" + field(node, secondKey))
+        return String.join(", ", types);
+    }
+
+    private String summarizeEvidence(Analysis analysis) {
+        List<String> evidence = new ArrayList<>();
+        collectEvidence(evidence, analysis.values());
+        collectEvidence(evidence, analysis.emotions());
+        collectEvidence(evidence, analysis.decisions());
+        collectEvidence(evidence, analysis.relationships());
+        collectEvidence(evidence, analysis.fears());
+        if (evidence.isEmpty()) {
+            return "[]";
+        }
+        return evidence.stream()
+                .distinct()
+                .limit(8)
                 .toList()
                 .toString();
+    }
+
+    private void collectEvidence(List<String> target, List<JsonNode> nodes) {
+        for (JsonNode node : nodes) {
+            target.addAll(evidenceValues(node));
+        }
+    }
+
+    private String summarizeSceneSignals(Analysis analysis) {
+        List<String> signals = new ArrayList<>();
+        addSceneSignals(signals, "value", analysis.values(), "item", "preference");
+        addSceneSignals(signals, "emotion", analysis.emotions(), "emotion", "behavior");
+        addSceneSignals(signals, "decision", analysis.decisions(), "topic", "choice");
+        addSceneSignals(signals, "relationship", analysis.relationships(), "name", "role");
+        addSceneSignals(signals, "fear", analysis.fears(), "type", "description");
+        if (signals.isEmpty()) {
+            return "[]";
+        }
+        return signals.stream()
+                .limit(8)
+                .toList()
+                .toString();
+    }
+
+    private void addSceneSignals(List<String> target, String type, List<JsonNode> nodes, String firstKey, String secondKey) {
+        for (JsonNode node : nodes) {
+            String first = field(node, firstKey);
+            String second = field(node, secondKey);
+            if (!first.isBlank() || !second.isBlank()) {
+                target.add(type + ":" + first + ":" + second);
+            }
+        }
     }
 }

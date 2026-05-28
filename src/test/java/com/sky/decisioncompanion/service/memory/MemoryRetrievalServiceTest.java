@@ -67,8 +67,9 @@ class MemoryRetrievalServiceTest {
                 List.of(decision("外地 offer", "暂缓接受", "担心家庭距离")));
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
                 Document.builder()
-                        .text("用户多次提到不希望离父母太远")
-                        .metadata("type", "conversation_analysis")
+                        .text("场景记忆：用户多次提到不希望离父母太远")
+                        .metadata("type", "conversation_scene")
+                        .metadata("memoryRole", "scene_evidence")
                         .metadata("profileRecordCount", 2)
                         .score(0.82)
                         .build()));
@@ -80,7 +81,9 @@ class MemoryRetrievalServiceTest {
         assertThat(context.promptContext()).contains("更看重离家近");
         assertThat(context.promptContext()).contains("【相似历史决策】");
         assertThat(context.promptContext()).contains("外地 offer");
-        assertThat(context.promptContext()).contains("【相关语义记忆】");
+        assertThat(context.promptContext()).contains("结构化画像表示较稳定的长期结论");
+        assertThat(context.promptContext()).contains("【相关场景记忆】");
+        assertThat(context.promptContext()).doesNotContain("【相关语义记忆】");
         assertThat(context.promptContext()).contains("离父母太远");
         assertThat(context.semanticMemories()).hasSize(1);
         assertThat(context.metrics().semanticHitCount()).isEqualTo(1);

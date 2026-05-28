@@ -108,7 +108,7 @@ public class DecisionAgentToolService {
         }
     }
 
-    @Tool(name = "searchSemanticMemory", description = "从向量存储中检索当前用户的长期语义记忆，用于补充结构化档案之外的背景信息。该工具只读，不会写入或修改任何档案。")
+    @Tool(name = "searchSemanticMemory", description = "从向量存储中检索当前用户的长期场景记忆，用于补充结构化画像之外的相似经历和证据。该工具只读，不会写入或修改任何档案。")
     public SemanticMemoryToolResult searchSemanticMemory(
             @ToolParam(description = "当前决策、复盘或困惑的查询文本") String query,
             @ToolParam(required = false, description = "最多返回多少条语义记忆，默认 3 条，最多 5 条") Integer topK,
@@ -139,7 +139,7 @@ public class DecisionAgentToolService {
                     .toList();
             SemanticMemoryToolResult result = new SemanticMemoryToolResult(
                     true,
-                    memories.isEmpty() ? "未找到相关长期记忆" : "找到相关长期记忆",
+                    memories.isEmpty() ? "未找到相关长期场景记忆" : "找到相关长期场景记忆",
                     memories);
             logService.recordSuccess(context.userId(), context.conversationId(), "searchSemanticMemory",
                     inputSummary, summarizeMemories(memories), elapsedMillis(start));

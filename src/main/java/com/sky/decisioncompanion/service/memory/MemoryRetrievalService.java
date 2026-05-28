@@ -227,6 +227,7 @@ public class MemoryRetrievalService {
             List<MemoryContext.SemanticMemory> semanticMemories) {
         return """
                 以下是系统检索到的用户长期记忆，仅作为参考，不代表用户当前最终意愿。
+                结构化画像表示较稳定的长期结论；相关场景记忆表示相似经历和证据补充，不要把场景记忆当作新的画像结论。
 
                 【稳定价值观】
                 %s
@@ -237,7 +238,7 @@ public class MemoryRetrievalService {
                 【相似历史决策】
                 %s
 
-                【相关语义记忆】
+                【相关场景记忆】
                 %s
 
                 【恐惧与边界】

@@ -135,7 +135,7 @@ class DecisionAgentToolServiceTest {
                 .thenReturn(new MemoryRetrievalService.SemanticSearchResult(List.of(
                         new MemoryContext.SemanticMemory(
                                 "用户多次提到不想离父母太远",
-                                "conversation_analysis",
+                                "conversation_scene",
                                 1,
                                 0.78)), 0.78, true, false));
 
@@ -147,7 +147,7 @@ class DecisionAgentToolServiceTest {
         assertThat(result.available()).isTrue();
         assertThat(result.memories()).hasSize(1);
         assertThat(result.memories().get(0).content()).contains("父母");
-        assertThat(result.memories().get(0).type()).isEqualTo("conversation_analysis");
+        assertThat(result.memories().get(0).type()).isEqualTo("conversation_scene");
         assertThat(result.memories().get(0).score()).isEqualTo(0.78);
     }
 

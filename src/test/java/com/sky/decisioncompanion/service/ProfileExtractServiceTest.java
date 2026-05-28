@@ -163,6 +163,45 @@ class ProfileExtractServiceTest {
     }
 
     @Test
+    void writesSceneEvidenceMemoryToVectorStoreInsteadOfDuplicatingProfileSummary() {
+        when(valuesRepository.selectList(any())).thenReturn(List.of());
+
+        String analysis = """
+                {
+                  "values": [
+                    {
+                      "item": "城市偏好",
+                      "preference": "希望离父母近一点",
+                      "confidence": 0.92,
+                      "evidence": ["我怕离家太远以后没时间陪父母"]
+                    }
+                  ]
+                }
+                """;
+
+        int saved = service.saveAnalysis(USER_ID, "我怕离家太远以后没时间陪父母", analysis);
+
+        assertThat(saved).isEqualTo(1);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(captor.capture());
+        Document document = captor.getValue().get(0);
+
+        assertThat(document.getMetadata())
+                .containsEntry("type", "conversation_scene")
+                .containsEntry("memoryRole", "scene_evidence")
+                .containsEntry("source", "profile_extract")
+                .containsEntry("profileRecordCount", 1);
+        assertThat(document.getText())
+                .contains("场景记忆")
+                .contains("关键证据")
+                .contains("我怕离家太远以后没时间陪父母")
+                .contains("关联画像类型: values")
+                .doesNotContain("用户ID:")
+                .doesNotContain("价值观: [城市偏好:希望离父母近一点]");
+    }
+
+    @Test
     void skipsDuplicateDecisionWithSameTopicAndChoice() {
         ProfileDecision existing = new ProfileDecision();
         existing.setId(22L);
