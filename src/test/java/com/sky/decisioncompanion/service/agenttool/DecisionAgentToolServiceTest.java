@@ -7,15 +7,14 @@ import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
+import com.sky.decisioncompanion.service.memory.MemoryContext;
+import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -49,7 +48,7 @@ class DecisionAgentToolServiceTest {
     private ProfileFearRepository fearRepository;
 
     @Mock
-    private VectorStore vectorStore;
+    private MemoryRetrievalService memoryRetrievalService;
 
     @Mock
     private AgentToolCallLogService logService;
@@ -67,7 +66,7 @@ class DecisionAgentToolServiceTest {
                 emotionRepository,
                 relationshipRepository,
                 fearRepository,
-                vectorStore,
+                memoryRetrievalService,
                 logService,
                 toolInvocationTracker);
     }
@@ -95,18 +94,10 @@ class DecisionAgentToolServiceTest {
 
     @Test
     void searchSemanticMemoryReturnsUnavailableWhenVectorStoreIsMissing() {
-        DecisionAgentToolService serviceWithoutVectorStore =
-                new DecisionAgentToolService(
-                        decisionRepository,
-                        valuesRepository,
-                        emotionRepository,
-                        relationshipRepository,
-                        fearRepository,
-                        null,
-                        logService,
-                        toolInvocationTracker);
+        when(memoryRetrievalService.searchSemanticMemories(USER_ID, "我怕离家太远", 5))
+                .thenReturn(new MemoryRetrievalService.SemanticSearchResult(List.of(), null, false, true));
 
-        DecisionAgentToolService.SemanticMemoryToolResult result = serviceWithoutVectorStore.searchSemanticMemory(
+        DecisionAgentToolService.SemanticMemoryToolResult result = service.searchSemanticMemory(
                 "我怕离家太远",
                 5,
                 toolContext());
@@ -121,7 +112,8 @@ class DecisionAgentToolServiceTest {
 
     @Test
     void searchSemanticMemoryLogsFailureAndReturnsUnavailableWhenVectorStoreFails() {
-        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenThrow(new RuntimeException("chroma down"));
+        when(memoryRetrievalService.searchSemanticMemories(USER_ID, "我怕离家太远", 5))
+                .thenReturn(new MemoryRetrievalService.SemanticSearchResult(List.of(), null, true, true));
 
         DecisionAgentToolService.SemanticMemoryToolResult result = service.searchSemanticMemory(
                 "我怕离家太远",
@@ -133,18 +125,19 @@ class DecisionAgentToolServiceTest {
         assertThat(result.message()).contains("暂时无法");
         verify(logService).recordFailure(eq(USER_ID), eq(CONVERSATION_ID), eq("searchSemanticMemory"),
                 argThat(summary -> summary.contains("query=我怕离家太远") && summary.contains("topK=5")),
-                argThat(error -> error.contains("查询长期语义记忆失败") && error.contains("chroma down")),
+                contains("查询长期语义记忆失败"),
                 anyLong());
     }
 
     @Test
     void searchSemanticMemoryReturnsCurrentUsersVectorMemories() {
-        Document document = Document.builder()
-                .text("用户多次提到不想离父母太远")
-                .metadata("type", "conversation_analysis")
-                .score(0.78)
-                .build();
-        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(document));
+        when(memoryRetrievalService.searchSemanticMemories(USER_ID, "我怕离家太远", 5))
+                .thenReturn(new MemoryRetrievalService.SemanticSearchResult(List.of(
+                        new MemoryContext.SemanticMemory(
+                                "用户多次提到不想离父母太远",
+                                "conversation_analysis",
+                                1,
+                                0.78)), 0.78, true, false));
 
         DecisionAgentToolService.SemanticMemoryToolResult result = service.searchSemanticMemory(
                 "我怕离家太远",

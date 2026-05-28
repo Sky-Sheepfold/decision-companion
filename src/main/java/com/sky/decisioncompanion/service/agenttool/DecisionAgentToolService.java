@@ -12,15 +12,12 @@ import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
+import com.sky.decisioncompanion.service.memory.MemoryContext;
+import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
 import com.sky.decisioncompanion.service.profile.ProfileWritePolicy;
 import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.lang.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -49,7 +46,7 @@ public class DecisionAgentToolService {
     private final ProfileEmotionRepository emotionRepository;
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
-    private final VectorStore vectorStore;
+    private final MemoryRetrievalService memoryRetrievalService;
     private final AgentToolCallLogService logService;
     private final AgentToolInvocationTracker invocationTracker;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -60,7 +57,7 @@ public class DecisionAgentToolService {
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
-            @Autowired(required = false) @Nullable VectorStore vectorStore,
+            MemoryRetrievalService memoryRetrievalService,
             AgentToolCallLogService logService,
             AgentToolInvocationTracker invocationTracker) {
         this.decisionRepository = decisionRepository;
@@ -68,7 +65,7 @@ public class DecisionAgentToolService {
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
-        this.vectorStore = vectorStore;
+        this.memoryRetrievalService = memoryRetrievalService;
         this.logService = logService;
         this.invocationTracker = invocationTracker;
     }
@@ -121,21 +118,21 @@ public class DecisionAgentToolService {
         markToolCalled(context, "searchSemanticMemory");
         String inputSummary = "query=" + query + ", topK=" + topK;
 
-        if (vectorStore == null) {
-            logService.recordSkipped(context.userId(), context.conversationId(), "searchSemanticMemory",
-                    inputSummary, "向量存储服务暂不可用", elapsedMillis(start));
-            return new SemanticMemoryToolResult(false, "向量存储服务暂不可用", List.of());
-        }
-
         try {
             int safeTopK = normalizeLimit(topK);
-            SearchRequest searchRequest = SearchRequest.builder()
-                    .query(query)
-                    .topK(safeTopK)
-                    .similarityThreshold(0.6)
-                    .filterExpression("userId == '" + context.userId() + "'")
-                    .build();
-            List<SemanticMemoryItem> memories = vectorStore.similaritySearch(searchRequest)
+            MemoryRetrievalService.SemanticSearchResult semanticResult =
+                    memoryRetrievalService.searchSemanticMemories(context.userId(), query, safeTopK);
+            if (!semanticResult.vectorAvailable()) {
+                logService.recordSkipped(context.userId(), context.conversationId(), "searchSemanticMemory",
+                        inputSummary, "向量存储服务暂不可用", elapsedMillis(start));
+                return new SemanticMemoryToolResult(false, "向量存储服务暂不可用", List.of());
+            }
+            if (semanticResult.degraded()) {
+                logService.recordFailure(context.userId(), context.conversationId(), "searchSemanticMemory",
+                        inputSummary, "查询长期语义记忆失败", elapsedMillis(start));
+                return new SemanticMemoryToolResult(false, "暂时无法查询长期语义记忆", List.of());
+            }
+            List<SemanticMemoryItem> memories = semanticResult.memories()
                     .stream()
                     .limit(safeTopK)
                     .map(this::toSemanticMemoryItem)
@@ -273,12 +270,11 @@ public class DecisionAgentToolService {
         invocationTracker.markCalled(context.requestId(), toolName);
     }
 
-    private SemanticMemoryItem toSemanticMemoryItem(Document document) {
-        Object type = document.getMetadata().getOrDefault("type", "memory");
+    private SemanticMemoryItem toSemanticMemoryItem(MemoryContext.SemanticMemory memory) {
         return new SemanticMemoryItem(
-                document.getText() == null ? document.getFormattedContent() : document.getText(),
-                type.toString(),
-                document.getScore());
+                memory.content(),
+                memory.type(),
+                memory.score());
     }
 
     private DecisionMatrixOption toDecisionMatrixOption(String topic, String option, List<String> dimensions) {
