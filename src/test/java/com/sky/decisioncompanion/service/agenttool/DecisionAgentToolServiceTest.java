@@ -152,6 +152,80 @@ class DecisionAgentToolServiceTest {
     }
 
     @Test
+    void searchSemanticMemorySkipsDuplicateLookupWhenAutomaticRecallAlreadyHitSameQuery() {
+        DecisionAgentToolService.SemanticMemoryToolResult result = service.searchSemanticMemory(
+                "我正在考虑是否接受外地 offer",
+                5,
+                toolContextWithSemanticRecall(2, "我正在考虑是否接受外地 offer"));
+
+        assertThat(result.available()).isFalse();
+        assertThat(result.message()).contains("本轮已召回");
+        assertThat(result.memories()).isEmpty();
+        verify(memoryRetrievalService, never()).searchSemanticMemories(anyLong(), anyString(), anyInt());
+        verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("searchSemanticMemory"),
+                contains("query=我正在考虑是否接受外地 offer"),
+                contains("duplicate semantic recall"), anyLong());
+    }
+
+    @Test
+    void searchSemanticMemorySkipsHighConfidenceSemanticEquivalentQueryAfterAutomaticRecall() {
+        DecisionAgentToolService.SemanticMemoryToolResult result = service.searchSemanticMemory(
+                "外地 offer 要不要接受",
+                5,
+                toolContextWithSemanticRecall(2, "我正在考虑是否接受外地 offer"));
+
+        assertThat(result.available()).isFalse();
+        assertThat(result.message()).contains("本轮已召回");
+        assertThat(result.memories()).isEmpty();
+        verify(memoryRetrievalService, never()).searchSemanticMemories(anyLong(), anyString(), anyInt());
+        verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("searchSemanticMemory"),
+                contains("query=外地 offer 要不要接受"),
+                contains("semantic-equivalent duplicate recall"), anyLong());
+    }
+
+    @Test
+    void searchSemanticMemoryAllowsRefinedQueryAfterAutomaticRecall() {
+        when(memoryRetrievalService.searchSemanticMemories(USER_ID, "过往因为离家距离拒绝 offer 的经历", 5))
+                .thenReturn(new MemoryRetrievalService.SemanticSearchResult(List.of(), null, true, false));
+
+        DecisionAgentToolService.SemanticMemoryToolResult result = service.searchSemanticMemory(
+                "过往因为离家距离拒绝 offer 的经历",
+                5,
+                toolContextWithSemanticRecall(2, "我正在考虑是否接受外地 offer"));
+
+        assertThat(result.available()).isTrue();
+        verify(memoryRetrievalService).searchSemanticMemories(USER_ID, "过往因为离家距离拒绝 offer 的经历", 5);
+    }
+
+    @Test
+    void searchSemanticMemoryAllowsNegationDirectionChangeAfterAutomaticRecall() {
+        when(memoryRetrievalService.searchSemanticMemories(USER_ID, "不接受外地 offer", 5))
+                .thenReturn(new MemoryRetrievalService.SemanticSearchResult(List.of(), null, true, false));
+
+        DecisionAgentToolService.SemanticMemoryToolResult result = service.searchSemanticMemory(
+                "不接受外地 offer",
+                5,
+                toolContextWithSemanticRecall(2, "接受外地 offer"));
+
+        assertThat(result.available()).isTrue();
+        verify(memoryRetrievalService).searchSemanticMemories(USER_ID, "不接受外地 offer", 5);
+    }
+
+    @Test
+    void searchSemanticMemoryAllowsEquivalentQueryWhenAutomaticRecallHadNoHits() {
+        when(memoryRetrievalService.searchSemanticMemories(USER_ID, "外地 offer 要不要接受", 5))
+                .thenReturn(new MemoryRetrievalService.SemanticSearchResult(List.of(), null, true, false));
+
+        DecisionAgentToolService.SemanticMemoryToolResult result = service.searchSemanticMemory(
+                "外地 offer 要不要接受",
+                5,
+                toolContextWithSemanticRecall(0, "我正在考虑是否接受外地 offer"));
+
+        assertThat(result.available()).isTrue();
+        verify(memoryRetrievalService).searchSemanticMemories(USER_ID, "外地 offer 要不要接受", 5);
+    }
+
+    @Test
     void generateDecisionMatrixBuildsDeterministicReadOnlyAnalysis() {
         DecisionAgentToolService.DecisionMatrixToolResult result = service.generateDecisionMatrix(
                 "是否接受外地 offer",
@@ -288,6 +362,18 @@ class DecisionAgentToolServiceTest {
                 AgentToolContext.CONVERSATION_ID, CONVERSATION_ID,
                 AgentToolContext.MESSAGE, "我正在考虑是否接受外地 offer",
                 AgentToolContext.REQUEST_ID, "req-1"));
+    }
+
+    private ToolContext toolContextWithSemanticRecall(int semanticHitCount, String semanticQuery) {
+        return new ToolContext(Map.of(
+                AgentToolContext.USER_ID, USER_ID,
+                AgentToolContext.CONVERSATION_ID, CONVERSATION_ID,
+                AgentToolContext.MESSAGE, "我正在考虑是否接受外地 offer",
+                AgentToolContext.REQUEST_ID, "req-1",
+                AgentToolContext.SEMANTIC_MEMORY_RETRIEVED, true,
+                AgentToolContext.SEMANTIC_HIT_COUNT, semanticHitCount,
+                AgentToolContext.MAX_SEMANTIC_SCORE, 0.82,
+                AgentToolContext.SEMANTIC_QUERY, semanticQuery));
     }
 
     private ToolContext correctedToolContext() {

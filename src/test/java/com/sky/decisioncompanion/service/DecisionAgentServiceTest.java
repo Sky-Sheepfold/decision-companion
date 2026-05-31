@@ -5,6 +5,7 @@ import com.sky.decisioncompanion.common.ChatResponse;
 import com.sky.decisioncompanion.model.ChatConversation;
 import com.sky.decisioncompanion.service.agenttool.AgentToolContext;
 import com.sky.decisioncompanion.service.agenttool.DecisionAgentToolService;
+import com.sky.decisioncompanion.service.memory.MemoryContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -13,6 +14,7 @@ import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import reactor.core.publisher.Flux;
 
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -60,8 +62,10 @@ class DecisionAgentServiceTest {
         conversation.setUserId(USER_ID);
         when(conversationHistoryService.resolveConversation(USER_ID, null, "我在纠结 offer"))
                 .thenReturn(conversation);
-        when(profileAdvisorService.buildSystemPrompt(USER_ID, "我在纠结 offer"))
-                .thenReturn("用户价值观上下文");
+        when(profileAdvisorService.buildProfilePrompt(USER_ID, "我在纠结 offer"))
+                .thenReturn(new ProfileAdvisorService.ProfilePrompt(
+                        "用户价值观上下文",
+                        memoryContext(2, 0.82)));
 
         service = new DecisionAgentService(
                 builder,
@@ -115,6 +119,18 @@ class DecisionAgentServiceTest {
     }
 
     @Test
+    void chatPassesSemanticRecallStateToTools() {
+        service.chat(USER_ID, null, "我在纠结 offer");
+
+        Map<String, Object> context = assertToolContextMapWasPassed();
+        assertThat(context)
+                .containsEntry(AgentToolContext.SEMANTIC_MEMORY_RETRIEVED, true)
+                .containsEntry(AgentToolContext.SEMANTIC_HIT_COUNT, 2)
+                .containsEntry(AgentToolContext.SEMANTIC_QUERY, "我在纠结 offer");
+        assertThat(context.get(AgentToolContext.MAX_SEMANTIC_SCORE)).isEqualTo(0.82);
+    }
+
+    @Test
     void chatStreamRegistersControlledToolsWithBackendContext() {
         DecisionAgentService.ChatStreamResult result = service.chatStream(USER_ID, null, "我在纠结 offer");
 
@@ -135,6 +151,12 @@ class DecisionAgentServiceTest {
 
     @SuppressWarnings("unchecked")
     private String assertToolContextWasPassed() {
+        Map<String, Object> context = assertToolContextMapWasPassed();
+        return (String) context.get(AgentToolContext.REQUEST_ID);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> assertToolContextMapWasPassed() {
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
         verify(requestSpec).toolContext(captor.capture());
         Map<String, Object> context = captor.getValue();
@@ -144,6 +166,18 @@ class DecisionAgentServiceTest {
                 .containsEntry(AgentToolContext.MESSAGE, "我在纠结 offer");
         assertThat(context.get(AgentToolContext.REQUEST_ID)).isInstanceOf(String.class);
         assertThat((String) context.get(AgentToolContext.REQUEST_ID)).isNotBlank();
-        return (String) context.get(AgentToolContext.REQUEST_ID);
+        return context;
+    }
+
+    private MemoryContext memoryContext(int semanticHitCount, Double maxSemanticScore) {
+        return new MemoryContext(
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                new MemoryContext.RetrievalMetrics(0, 0, 0, 0,
+                        semanticHitCount, maxSemanticScore, true, false),
+                "用户价值观上下文");
     }
 }

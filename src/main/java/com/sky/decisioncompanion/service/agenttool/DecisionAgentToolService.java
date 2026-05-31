@@ -41,6 +41,13 @@ public class DecisionAgentToolService {
     private static final int MAX_LIMIT = 5;
     private static final int MIN_SCORE = 1;
     private static final int MAX_SCORE = 5;
+    private static final int MIN_SEMANTIC_CORE_LENGTH = 3;
+    private static final int MAX_SEMANTIC_CORE_LENGTH_DELTA = 1;
+    private static final double SEMANTIC_EQUIVALENCE_THRESHOLD = 0.82;
+    private static final List<String> LOW_INFORMATION_PHRASES = List.of(
+            "我正在考虑", "我在考虑", "我正在纠结", "我在纠结", "我纠结", "帮我看看", "请帮我看看",
+            "是否要", "是否", "要不要", "该不该", "能不能", "可以吗", "吗", "呢");
+    private static final List<String> NEGATION_MARKERS = List.of("不", "没", "未", "拒绝", "放弃", "取消");
     private final ProfileDecisionRepository decisionRepository;
     private final ProfileValuesRepository valuesRepository;
     private final ProfileEmotionRepository emotionRepository;
@@ -120,6 +127,16 @@ public class DecisionAgentToolService {
 
         try {
             int safeTopK = normalizeLimit(topK);
+            String duplicateReason = duplicateSemanticRecallReason(context, query);
+            if (duplicateReason != null) {
+                String message = "本轮已召回相关场景记忆，已跳过重复查询";
+                logService.recordSkipped(context.userId(), context.conversationId(), "searchSemanticMemory",
+                        inputSummary, duplicateReason + ": semanticHitCount="
+                                + context.semanticHitCount() + ", maxSemanticScore=" + context.maxSemanticScore(),
+                        elapsedMillis(start));
+                return new SemanticMemoryToolResult(false, message, List.of());
+            }
+
             MemoryRetrievalService.SemanticSearchResult semanticResult =
                     memoryRetrievalService.searchSemanticMemories(context.userId(), query, safeTopK);
             if (!semanticResult.vectorAvailable()) {
@@ -502,6 +519,103 @@ public class DecisionAgentToolService {
             return DEFAULT_LIMIT;
         }
         return Math.min(limit, MAX_LIMIT);
+    }
+
+    private String duplicateSemanticRecallReason(AgentToolContext.Execution context, String query) {
+        if (!context.semanticMemoryRetrieved() || context.semanticHitCount() <= 0) {
+            return null;
+        }
+        String normalizedQuery = normalizeSemanticQuery(query);
+        String normalizedOriginal = normalizeSemanticQuery(context.semanticQuery());
+        if (normalizedQuery.equals(normalizedOriginal)) {
+            return "exact duplicate semantic recall";
+        }
+        if (isSemanticEquivalentDuplicate(normalizedQuery, normalizedOriginal)) {
+            return "semantic-equivalent duplicate recall";
+        }
+        return null;
+    }
+
+    private String normalizeSemanticQuery(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s,，。；;、.!！?？:：\"“”'‘’()（）\\[\\]【】]+", "");
+    }
+
+    private boolean isSemanticEquivalentDuplicate(String query, String originalQuery) {
+        String queryCore = semanticCore(query);
+        String originalCore = semanticCore(originalQuery);
+        if (queryCore.length() < MIN_SEMANTIC_CORE_LENGTH
+                || originalCore.length() < MIN_SEMANTIC_CORE_LENGTH) {
+            return false;
+        }
+        if (Math.abs(queryCore.length() - originalCore.length()) > MAX_SEMANTIC_CORE_LENGTH_DELTA) {
+            return false;
+        }
+        if (hasNegationMismatch(queryCore, originalCore)) {
+            return false;
+        }
+        if (queryCore.equals(originalCore)) {
+            return true;
+        }
+        return diceSimilarity(bigrams(queryCore), bigrams(originalCore)) >= SEMANTIC_EQUIVALENCE_THRESHOLD
+                || diceSimilarity(characters(queryCore), characters(originalCore)) >= SEMANTIC_EQUIVALENCE_THRESHOLD;
+    }
+
+    private String semanticCore(String value) {
+        String result = safe(value);
+        for (String phrase : LOW_INFORMATION_PHRASES) {
+            result = result.replace(phrase, "");
+        }
+        return result;
+    }
+
+    private boolean hasNegationMismatch(String left, String right) {
+        return containsNegation(left) != containsNegation(right);
+    }
+
+    private boolean containsNegation(String value) {
+        return NEGATION_MARKERS.stream().anyMatch(value::contains);
+    }
+
+    private List<String> bigrams(String value) {
+        if (value.length() < 2) {
+            return List.of(value);
+        }
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < value.length() - 1; i++) {
+            result.add(value.substring(i, i + 2));
+        }
+        return result;
+    }
+
+    private List<String> characters(String value) {
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < value.length(); i++) {
+            result.add(value.substring(i, i + 1));
+        }
+        return result;
+    }
+
+    private double diceSimilarity(List<String> left, List<String> right) {
+        if (left.isEmpty() || right.isEmpty()) {
+            return 0.0;
+        }
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (String item : left) {
+            counts.merge(item, 1, Integer::sum);
+        }
+        int overlap = 0;
+        for (String item : right) {
+            Integer count = counts.get(item);
+            if (count != null && count > 0) {
+                overlap++;
+                counts.put(item, count - 1);
+            }
+        }
+        return (2.0 * overlap) / (left.size() + right.size());
     }
 
     private List<String> safeList(List<String> values, int maxSize) {

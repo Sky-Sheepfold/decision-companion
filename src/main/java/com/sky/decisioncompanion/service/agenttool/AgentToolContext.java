@@ -11,6 +11,10 @@ public final class AgentToolContext {
     public static final String CONVERSATION_ID = "conversationId";
     public static final String MESSAGE = "message";
     public static final String REQUEST_ID = "requestId";
+    public static final String SEMANTIC_MEMORY_RETRIEVED = "semanticMemoryRetrieved";
+    public static final String SEMANTIC_HIT_COUNT = "semanticHitCount";
+    public static final String MAX_SEMANTIC_SCORE = "maxSemanticScore";
+    public static final String SEMANTIC_QUERY = "semanticQuery";
 
     private AgentToolContext() {
     }
@@ -24,7 +28,11 @@ public final class AgentToolContext {
                 userId,
                 longValue(context.get(CONVERSATION_ID)),
                 stringValue(context.get(MESSAGE)),
-                stringValue(context.get(REQUEST_ID)));
+                stringValue(context.get(REQUEST_ID)),
+                booleanValue(context.get(SEMANTIC_MEMORY_RETRIEVED)),
+                intValue(context.get(SEMANTIC_HIT_COUNT)),
+                doubleValue(context.get(MAX_SEMANTIC_SCORE)),
+                stringValue(context.get(SEMANTIC_QUERY)));
     }
 
     private static Long longValue(Object value) {
@@ -41,6 +49,44 @@ public final class AgentToolContext {
         return value == null ? "" : value.toString();
     }
 
-    public record Execution(Long userId, Long conversationId, String message, String requestId) {
+    private static boolean booleanValue(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        return Boolean.parseBoolean(value.toString());
+    }
+
+    private static int intValue(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        return Integer.parseInt(value.toString());
+    }
+
+    private static Double doubleValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        return Double.valueOf(value.toString());
+    }
+
+    public record Execution(
+            Long userId,
+            Long conversationId,
+            String message,
+            String requestId,
+            boolean semanticMemoryRetrieved,
+            int semanticHitCount,
+            Double maxSemanticScore,
+            String semanticQuery) {
     }
 }

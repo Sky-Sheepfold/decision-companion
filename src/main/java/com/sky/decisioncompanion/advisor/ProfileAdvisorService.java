@@ -14,9 +14,13 @@ public class ProfileAdvisorService {
     }
 
     public String buildSystemPrompt(Long userId, String userMessage) {
+        return buildProfilePrompt(userId, userMessage).systemPrompt();
+    }
+
+    public ProfilePrompt buildProfilePrompt(Long userId, String userMessage) {
         MemoryContext memoryContext = memoryRetrievalService.retrieve(userId, userMessage);
 
-        return """
+        String systemPrompt = """
                 你是用户的人生决策伙伴，像一个懂他的朋友一样陪他想清楚问题。
 
                 【关于这个用户，你已经了解到的：】
@@ -29,5 +33,9 @@ public class ProfileAdvisorService {
                 4. 如果发现他可能在逃避某个恐惧，温和地指出来
                 5. 日常小事也认真对待，不要觉得"这不是大事"
                 """.formatted(memoryContext.promptContext());
+        return new ProfilePrompt(systemPrompt, memoryContext);
+    }
+
+    public record ProfilePrompt(String systemPrompt, MemoryContext memoryContext) {
     }
 }

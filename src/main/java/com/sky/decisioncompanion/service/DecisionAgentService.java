@@ -6,6 +6,7 @@ import com.sky.decisioncompanion.model.ChatConversation;
 import com.sky.decisioncompanion.service.agenttool.AgentToolContext;
 import com.sky.decisioncompanion.service.agenttool.DecisionAgentToolService;
 import com.sky.decisioncompanion.service.agenttool.AgentToolInvocationTracker;
+import com.sky.decisioncompanion.service.memory.MemoryContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -14,6 +15,7 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -56,15 +58,16 @@ public class DecisionAgentService {
         conversationHistoryService.saveMessage(userId, conversation.getId(), "user", userMessage);
 
         String memoryId = conversationMemoryId(userId, conversation.getId());
-        String systemPrompt = withProfileContext(userId, userMessage);
+        ProfileAdvisorService.ProfilePrompt profilePrompt = withProfileContext(userId, userMessage);
         String requestId = UUID.randomUUID().toString();
 
         try {
             String reply = chatClient.prompt()
-                    .system(systemPrompt)
+                    .system(profilePrompt.systemPrompt())
                     .user(userMessage)
                     .tools(agentToolService)
-                    .toolContext(toolContext(userId, conversation.getId(), userMessage, requestId))
+                    .toolContext(toolContext(userId, conversation.getId(), userMessage, requestId,
+                            profilePrompt.memoryContext()))
                     .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, memoryId))
                     .call()
                     .content();
@@ -88,15 +91,16 @@ public class DecisionAgentService {
         conversationHistoryService.saveMessage(userId, conversation.getId(), "user", userMessage);
 
         String memoryId = conversationMemoryId(userId, conversation.getId());
-        String systemPrompt = withProfileContext(userId, userMessage);
+        ProfileAdvisorService.ProfilePrompt profilePrompt = withProfileContext(userId, userMessage);
         String requestId = UUID.randomUUID().toString();
         StringBuilder replyBuilder = new StringBuilder();
 
         Flux<String> content = chatClient.prompt()
-                .system(systemPrompt)
+                .system(profilePrompt.systemPrompt())
                 .user(userMessage)
                 .tools(agentToolService)
-                .toolContext(toolContext(userId, conversation.getId(), userMessage, requestId))
+                .toolContext(toolContext(userId, conversation.getId(), userMessage, requestId,
+                        profilePrompt.memoryContext()))
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, memoryId))
                 .stream()
                 .content()
@@ -112,12 +116,13 @@ public class DecisionAgentService {
         return new ChatStreamResult(conversation.getId(), content);
     }
 
-    private String withProfileContext(Long userId, String userMessage) {
-        String systemPrompt = profileAdvisorService.buildSystemPrompt(userId, userMessage);
-        return systemPrompt + """
+    private ProfileAdvisorService.ProfilePrompt withProfileContext(Long userId, String userMessage) {
+        ProfileAdvisorService.ProfilePrompt profilePrompt = profileAdvisorService.buildProfilePrompt(userId, userMessage);
+        String systemPrompt = profilePrompt.systemPrompt() + """
 
                 【可用工具使用原则：】
                 当用户处于重大决策、复盘或多选项比较场景时，可以调用受控工具查询历史决策、长期语义记忆或生成决策矩阵。
+                如果系统提示词中已经有【相关场景记忆】，不要为了普通对话重复调用 searchSemanticMemory；只有需要更具体历史证据时才做二次精查。
                 当用户明确表达可长期复用的长期稳定偏好、价值观、情绪模式、关系影响、恐惧或边界时，必须先调用 updateUserProfile，再组织回复。
                 updateUserProfile 会按置信度处理：高置信度自动写入，中置信度返回 needs_confirmation 并应在回复中询问用户确认，低置信度跳过。
                 如果用户只是模糊倾诉、事实证据不足或你无法给出明确置信度，不要调用 updateUserProfile。
@@ -126,18 +131,33 @@ public class DecisionAgentService {
                 不要基于模型猜测直接写入档案或决策记录。
                 单轮对话尽量只调用最必要的工具。
                 """;
+        return new ProfileAdvisorService.ProfilePrompt(systemPrompt, profilePrompt.memoryContext());
     }
 
     private String conversationMemoryId(Long userId, Long conversationId) {
         return "user:" + userId + ":conversation:" + conversationId;
     }
 
-    private Map<String, Object> toolContext(Long userId, Long conversationId, String userMessage, String requestId) {
-        return Map.of(
-                AgentToolContext.USER_ID, userId,
-                AgentToolContext.CONVERSATION_ID, conversationId,
-                AgentToolContext.MESSAGE, userMessage,
-                AgentToolContext.REQUEST_ID, requestId);
+    private Map<String, Object> toolContext(
+            Long userId,
+            Long conversationId,
+            String userMessage,
+            String requestId,
+            MemoryContext memoryContext) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put(AgentToolContext.USER_ID, userId);
+        context.put(AgentToolContext.CONVERSATION_ID, conversationId);
+        context.put(AgentToolContext.MESSAGE, userMessage);
+        context.put(AgentToolContext.REQUEST_ID, requestId);
+
+        MemoryContext.RetrievalMetrics metrics = memoryContext.metrics();
+        context.put(AgentToolContext.SEMANTIC_MEMORY_RETRIEVED, metrics.semanticHitCount() > 0);
+        context.put(AgentToolContext.SEMANTIC_HIT_COUNT, metrics.semanticHitCount());
+        if (metrics.maxSemanticScore() != null) {
+            context.put(AgentToolContext.MAX_SEMANTIC_SCORE, metrics.maxSemanticScore());
+        }
+        context.put(AgentToolContext.SEMANTIC_QUERY, userMessage);
+        return context;
     }
 
     private void logProfileToolInvocationState(Long userId, Long conversationId, String requestId, String userMessage) {
