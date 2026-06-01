@@ -6,6 +6,7 @@ public record MemoryContext(
         List<ProfileMemory> values,
         List<ProfileMemory> emotions,
         List<DecisionMemory> decisions,
+        List<RelationshipMemory> relationships,
         List<ProfileMemory> fears,
         List<SemanticMemory> semanticMemories,
         RetrievalMetrics metrics,
@@ -15,6 +16,7 @@ public record MemoryContext(
         values = List.copyOf(values);
         emotions = List.copyOf(emotions);
         decisions = List.copyOf(decisions);
+        relationships = List.copyOf(relationships);
         fears = List.copyOf(fears);
         semanticMemories = List.copyOf(semanticMemories);
     }
@@ -25,6 +27,14 @@ public record MemoryContext(
     public record DecisionMemory(String topic, String choice, String reason, String outcome, Integer satisfaction) {
     }
 
+    public record RelationshipMemory(
+            String name,
+            String role,
+            String influenceLevel,
+            String influenceStyle,
+            String note) {
+    }
+
     public record SemanticMemory(String content, String type, Integer profileRecordCount, Double score) {
     }
 
@@ -32,6 +42,7 @@ public record MemoryContext(
             int valueCount,
             int emotionCount,
             int decisionCount,
+            int relationshipCount,
             int fearCount,
             int semanticHitCount,
             Double maxSemanticScore,

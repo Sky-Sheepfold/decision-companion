@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.sky.decisioncompanion.model.ProfileDecision;
 import com.sky.decisioncompanion.model.ProfileEmotion;
 import com.sky.decisioncompanion.model.ProfileFear;
+import com.sky.decisioncompanion.model.ProfileRelationship;
 import com.sky.decisioncompanion.model.ProfileValues;
 import com.sky.decisioncompanion.repository.ProfileDecisionRepository;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
+import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +40,7 @@ public class MemoryRetrievalService {
     private final ProfileValuesRepository valuesRepository;
     private final ProfileDecisionRepository decisionRepository;
     private final ProfileEmotionRepository emotionRepository;
+    private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
     private final VectorStore vectorStore;
 
@@ -45,11 +48,13 @@ public class MemoryRetrievalService {
             ProfileValuesRepository valuesRepository,
             ProfileDecisionRepository decisionRepository,
             ProfileEmotionRepository emotionRepository,
+            ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
             @Autowired(required = false) @Nullable VectorStore vectorStore) {
         this.valuesRepository = valuesRepository;
         this.decisionRepository = decisionRepository;
         this.emotionRepository = emotionRepository;
+        this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
         this.vectorStore = vectorStore;
     }
@@ -62,6 +67,7 @@ public class MemoryRetrievalService {
         List<MemoryContext.ProfileMemory> values = new ArrayList<>();
         List<MemoryContext.ProfileMemory> emotions = new ArrayList<>();
         List<MemoryContext.DecisionMemory> decisions = new ArrayList<>();
+        List<MemoryContext.RelationshipMemory> relationships = new ArrayList<>();
         List<MemoryContext.ProfileMemory> fears = new ArrayList<>();
         boolean degraded = false;
 
@@ -69,6 +75,7 @@ public class MemoryRetrievalService {
             values = getValues(userId);
             emotions = getEmotions(userId);
             decisions = getDecisions(userId, query, DEFAULT_DECISION_LIMIT);
+            relationships = getRelationships(userId);
             fears = getFears(userId);
         } catch (Exception e) {
             degraded = true;
@@ -78,11 +85,18 @@ public class MemoryRetrievalService {
         SemanticSearchResult semanticResult = searchSemanticMemories(userId, query, MAX_SECTION_ITEMS);
         degraded = degraded || semanticResult.degraded();
 
-        String promptContext = buildPromptContext(values, emotions, decisions, fears, semanticResult.memories());
+        String promptContext = buildPromptContext(
+                values,
+                emotions,
+                decisions,
+                relationships,
+                fears,
+                semanticResult.memories());
         MemoryContext.RetrievalMetrics metrics = new MemoryContext.RetrievalMetrics(
                 values.size(),
                 emotions.size(),
                 decisions.size(),
+                relationships.size(),
                 fears.size(),
                 semanticResult.memories().size(),
                 semanticResult.maxScore(),
@@ -90,11 +104,19 @@ public class MemoryRetrievalService {
                 degraded);
 
         logger.info("Memory RAG 召回完成, userId: {}, valueCount: {}, emotionCount: {}, decisionCount: {}, "
-                        + "fearCount: {}, semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
-                userId, values.size(), emotions.size(), decisions.size(), fears.size(),
+                        + "relationshipCount: {}, fearCount: {}, semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
+                userId, values.size(), emotions.size(), decisions.size(), relationships.size(), fears.size(),
                 semanticResult.memories().size(), semanticResult.maxScore(), degraded);
 
-        return new MemoryContext(values, emotions, decisions, fears, semanticResult.memories(), metrics, promptContext);
+        return new MemoryContext(
+                values,
+                emotions,
+                decisions,
+                relationships,
+                fears,
+                semanticResult.memories(),
+                metrics,
+                promptContext);
     }
 
     public SemanticSearchResult searchSemanticMemories(Long userId, String query, Integer topK) {
@@ -187,6 +209,26 @@ public class MemoryRetrievalService {
                 .toList();
     }
 
+    private List<MemoryContext.RelationshipMemory> getRelationships(Long userId) {
+        return relationshipRepository.selectList(new LambdaQueryWrapper<ProfileRelationship>()
+                        .eq(ProfileRelationship::getUserId, userId)
+                        .orderByDesc(ProfileRelationship::getUpdatedAt)
+                        .last("LIMIT " + MAX_SECTION_ITEMS))
+                .stream()
+                .filter(relationship -> Objects.equals(userId, relationship.getUserId()))
+                .limit(MAX_SECTION_ITEMS)
+                .map(relationship -> new MemoryContext.RelationshipMemory(
+                        clean(relationship.getName()),
+                        truncate(relationship.getRole()),
+                        truncate(relationship.getInfluenceLevel()),
+                        truncate(relationship.getInfluenceStyle()),
+                        truncate(relationship.getNote())))
+                .filter(memory -> StringUtils.hasText(memory.name())
+                        || StringUtils.hasText(memory.note())
+                        || StringUtils.hasText(memory.influenceStyle()))
+                .toList();
+    }
+
     private List<MemoryContext.ProfileMemory> getFears(Long userId) {
         return fearRepository.selectList(new LambdaQueryWrapper<ProfileFear>()
                         .eq(ProfileFear::getUserId, userId)
@@ -223,6 +265,7 @@ public class MemoryRetrievalService {
             List<MemoryContext.ProfileMemory> values,
             List<MemoryContext.ProfileMemory> emotions,
             List<MemoryContext.DecisionMemory> decisions,
+            List<MemoryContext.RelationshipMemory> relationships,
             List<MemoryContext.ProfileMemory> fears,
             List<MemoryContext.SemanticMemory> semanticMemories) {
         return """
@@ -238,6 +281,9 @@ public class MemoryRetrievalService {
                 【相似历史决策】
                 %s
 
+                【关系影响】
+                %s
+
                 【相关场景记忆】
                 %s
 
@@ -247,6 +293,7 @@ public class MemoryRetrievalService {
                 formatProfileMemories(values),
                 formatProfileMemories(emotions),
                 formatDecisionMemories(decisions),
+                formatRelationshipMemories(relationships),
                 formatSemanticMemories(semanticMemories),
                 formatProfileMemories(fears));
     }
@@ -290,6 +337,37 @@ public class MemoryRetrievalService {
                 .collect(java.util.stream.Collectors.joining("\n"));
     }
 
+    private String formatRelationshipMemories(List<MemoryContext.RelationshipMemory> memories) {
+        if (memories.isEmpty()) {
+            return "（暂无高相关记录）";
+        }
+        return memories.stream()
+                .limit(MAX_SECTION_ITEMS)
+                .map(memory -> {
+                    String line = clean(memory.name());
+                    if (StringUtils.hasText(memory.role())) {
+                        line += "（" + clean(memory.role()) + "）";
+                    }
+                    List<String> details = new ArrayList<>();
+                    if (StringUtils.hasText(memory.influenceLevel())) {
+                        details.add("影响力" + clean(memory.influenceLevel()));
+                    }
+                    if (StringUtils.hasText(memory.influenceStyle())) {
+                        details.add("影响方式：" + clean(memory.influenceStyle()));
+                    }
+                    if (StringUtils.hasText(memory.note())) {
+                        details.add("备注：" + clean(memory.note()));
+                    }
+                    if (!details.isEmpty()) {
+                        line += "：" + String.join("，", details);
+                    }
+                    return "- " + line;
+                })
+                .toList()
+                .stream()
+                .collect(java.util.stream.Collectors.joining("\n"));
+    }
+
     private String formatSemanticMemories(List<MemoryContext.SemanticMemory> memories) {
         if (memories.isEmpty()) {
             return "（暂无高相关记录）";
@@ -306,16 +384,18 @@ public class MemoryRetrievalService {
         List<MemoryContext.ProfileMemory> values = List.of();
         List<MemoryContext.ProfileMemory> emotions = List.of();
         List<MemoryContext.DecisionMemory> decisions = List.of();
+        List<MemoryContext.RelationshipMemory> relationships = List.of();
         List<MemoryContext.ProfileMemory> fears = List.of();
         List<MemoryContext.SemanticMemory> semanticMemories = List.of();
         return new MemoryContext(
                 values,
                 emotions,
                 decisions,
+                relationships,
                 fears,
                 semanticMemories,
-                new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0, null, vectorAvailable, degraded),
-                buildPromptContext(values, emotions, decisions, fears, semanticMemories));
+                new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0, 0, null, vectorAvailable, degraded),
+                buildPromptContext(values, emotions, decisions, relationships, fears, semanticMemories));
     }
 
     private boolean matchesDecision(ProfileDecision decision, List<String> queryTokens) {

@@ -3,10 +3,12 @@ package com.sky.decisioncompanion.service.memory;
 import com.sky.decisioncompanion.model.ProfileDecision;
 import com.sky.decisioncompanion.model.ProfileEmotion;
 import com.sky.decisioncompanion.model.ProfileFear;
+import com.sky.decisioncompanion.model.ProfileRelationship;
 import com.sky.decisioncompanion.model.ProfileValues;
 import com.sky.decisioncompanion.repository.ProfileDecisionRepository;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
+import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +46,9 @@ class MemoryRetrievalServiceTest {
     private ProfileFearRepository fearRepository;
 
     @Mock
+    private ProfileRelationshipRepository relationshipRepository;
+
+    @Mock
     private VectorStore vectorStore;
 
     private MemoryRetrievalService service;
@@ -54,6 +59,7 @@ class MemoryRetrievalServiceTest {
                 valuesRepository,
                 decisionRepository,
                 emotionRepository,
+                relationshipRepository,
                 fearRepository,
                 vectorStore);
     }
@@ -62,6 +68,8 @@ class MemoryRetrievalServiceTest {
     void retrieveBuildsStructuredPromptContextFromProfilesAndSemanticMemory() {
         when(valuesRepository.selectList(any())).thenReturn(List.of(value("城市偏好", "更看重离家近", "0.90")));
         when(emotionRepository.selectList(any())).thenReturn(List.of(emotion("焦虑", "被催促时容易压力变大")));
+        when(relationshipRepository.selectList(any())).thenReturn(List.of(
+                relationship("妈妈", "母亲", "高", "从安全和稳定角度影响选择", "希望用户不要离家太远")));
         when(fearRepository.selectList(any())).thenReturn(List.of(fear("fear", "害怕离家太远", "0.80")));
         when(decisionRepository.selectList(any())).thenReturn(
                 List.of(decision("外地 offer", "暂缓接受", "担心家庭距离")));
@@ -81,10 +89,15 @@ class MemoryRetrievalServiceTest {
         assertThat(context.promptContext()).contains("更看重离家近");
         assertThat(context.promptContext()).contains("【相似历史决策】");
         assertThat(context.promptContext()).contains("外地 offer");
+        assertThat(context.promptContext()).contains("【关系影响】");
+        assertThat(context.promptContext()).contains("妈妈");
+        assertThat(context.promptContext()).contains("从安全和稳定角度影响选择");
         assertThat(context.promptContext()).contains("结构化画像表示较稳定的长期结论");
         assertThat(context.promptContext()).contains("【相关场景记忆】");
         assertThat(context.promptContext()).doesNotContain("【相关语义记忆】");
         assertThat(context.promptContext()).contains("离父母太远");
+        assertThat(context.relationships()).hasSize(1);
+        assertThat(context.metrics().relationshipCount()).isEqualTo(1);
         assertThat(context.semanticMemories()).hasSize(1);
         assertThat(context.metrics().semanticHitCount()).isEqualTo(1);
         assertThat(context.metrics().maxSemanticScore()).isEqualTo(0.82);
@@ -105,10 +118,12 @@ class MemoryRetrievalServiceTest {
                 valuesRepository,
                 decisionRepository,
                 emotionRepository,
+                relationshipRepository,
                 fearRepository,
                 null);
         when(valuesRepository.selectList(any())).thenReturn(List.of(value("稳定性", "偏好长期确定性", "0.85")));
         when(emotionRepository.selectList(any())).thenReturn(List.of());
+        when(relationshipRepository.selectList(any())).thenReturn(List.of());
         when(fearRepository.selectList(any())).thenReturn(List.of());
         when(decisionRepository.selectList(any())).thenReturn(List.of());
 
@@ -130,6 +145,7 @@ class MemoryRetrievalServiceTest {
                 value("v5", "p5", "0.9"),
                 value("v6", "p6", "0.9")));
         when(emotionRepository.selectList(any())).thenReturn(List.of());
+        when(relationshipRepository.selectList(any())).thenReturn(List.of());
         when(fearRepository.selectList(any())).thenReturn(List.of());
         when(decisionRepository.selectList(any())).thenReturn(List.of());
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
@@ -167,6 +183,22 @@ class MemoryRetrievalServiceTest {
         fear.setDescription(description);
         fear.setConfidence(new BigDecimal(confidence));
         return fear;
+    }
+
+    private ProfileRelationship relationship(
+            String name,
+            String role,
+            String influenceLevel,
+            String influenceStyle,
+            String note) {
+        ProfileRelationship relationship = new ProfileRelationship();
+        relationship.setUserId(USER_ID);
+        relationship.setName(name);
+        relationship.setRole(role);
+        relationship.setInfluenceLevel(influenceLevel);
+        relationship.setInfluenceStyle(influenceStyle);
+        relationship.setNote(note);
+        return relationship;
     }
 
     private ProfileDecision decision(String topic, String choice, String reason) {
