@@ -36,6 +36,19 @@ spring:
 server:
   port: 8080
 
+decision-companion:
+  memory:
+    retrieval:
+      section-limit: 5
+      text-max-length: 200
+      semantic-top-k: 5
+      semantic-similarity-threshold: 0.6
+      decision:
+        default-limit: 3
+        max-limit: 5
+        candidate-multiplier: 3
+        min-token-length: 2
+
 sa-token:
   token-name: Authorization
   token-prefix: Bearer

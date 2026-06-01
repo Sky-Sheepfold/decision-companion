@@ -1,12 +1,12 @@
 package com.sky.decisioncompanion.service.agenttool;
 
-import com.sky.decisioncompanion.model.ProfileDecision;
+import com.sky.decisioncompanion.config.MemoryRetrievalProperties;
 import com.sky.decisioncompanion.model.ProfileValues;
-import com.sky.decisioncompanion.repository.ProfileDecisionRepository;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
+import com.sky.decisioncompanion.service.memory.DecisionRecallService;
 import com.sky.decisioncompanion.service.memory.MemoryContext;
 import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,9 +33,6 @@ class DecisionAgentToolServiceTest {
     private static final Long CONVERSATION_ID = 9L;
 
     @Mock
-    private ProfileDecisionRepository decisionRepository;
-
-    @Mock
     private ProfileValuesRepository valuesRepository;
 
     @Mock
@@ -51,32 +48,36 @@ class DecisionAgentToolServiceTest {
     private MemoryRetrievalService memoryRetrievalService;
 
     @Mock
+    private DecisionRecallService decisionRecallService;
+
+    @Mock
     private AgentToolCallLogService logService;
 
     @Mock
     private AgentToolInvocationTracker toolInvocationTracker;
 
+    private MemoryRetrievalProperties properties;
     private DecisionAgentToolService service;
 
     @BeforeEach
     void setUp() {
+        properties = new MemoryRetrievalProperties();
         service = new DecisionAgentToolService(
-                decisionRepository,
                 valuesRepository,
                 emotionRepository,
                 relationshipRepository,
                 fearRepository,
                 memoryRetrievalService,
+                decisionRecallService,
+                properties,
                 logService,
                 toolInvocationTracker);
     }
 
     @Test
     void searchDecisionHistoryOnlyReturnsCurrentUsersMatchingDecisions() {
-        ProfileDecision matching = decision(USER_ID, "外地 offer", "接受杭州 offer", "成长空间更大");
-        ProfileDecision unrelated = decision(USER_ID, "租房选择", "住公司附近", "通勤更短");
-        ProfileDecision anotherUser = decision(2L, "外地 offer", "留在本地", "陪家人");
-        when(decisionRepository.selectList(any())).thenReturn(List.of(matching, unrelated, anotherUser));
+        when(decisionRecallService.recall(USER_ID, "offer 城市 成长", 5))
+                .thenReturn(decisionResult(decision("外地 offer", "接受杭州 offer", "成长空间更大")));
 
         DecisionAgentToolService.DecisionHistoryToolResult result = service.searchDecisionHistory(
                 "offer 城市 成长",
@@ -87,9 +88,19 @@ class DecisionAgentToolServiceTest {
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).topic()).isEqualTo("外地 offer");
         assertThat(result.items().get(0).choice()).isEqualTo("接受杭州 offer");
+        verify(decisionRecallService).recall(USER_ID, "offer 城市 成长", 5);
         verify(logService).recordSuccess(eq(USER_ID), eq(CONVERSATION_ID), eq("searchDecisionHistory"),
                 argThat(summary -> summary.contains("query=offer 城市 成长") && summary.contains("limit=5")),
                 contains("外地 offer"), anyLong());
+    }
+
+    @Test
+    void searchDecisionHistoryClipsLimitUsingSharedConfiguration() {
+        when(decisionRecallService.recall(USER_ID, "offer", 5)).thenReturn(decisionResult());
+
+        service.searchDecisionHistory("offer", 99, toolContext());
+
+        verify(decisionRecallService).recall(USER_ID, "offer", 5);
     }
 
     @Test
@@ -384,13 +395,19 @@ class DecisionAgentToolServiceTest {
                 AgentToolContext.REQUEST_ID, "req-1"));
     }
 
-    private ProfileDecision decision(Long userId, String topic, String choice, String reason) {
-        ProfileDecision decision = new ProfileDecision();
-        decision.setUserId(userId);
-        decision.setTopic(topic);
-        decision.setChoice(choice);
-        decision.setReason(reason);
-        decision.setSatisfaction(3);
-        return decision;
+    private DecisionRecallService.DecisionRecallResult decisionResult(
+            DecisionRecallService.DecisionRecallItem... items) {
+        return new DecisionRecallService.DecisionRecallResult(List.of(items));
+    }
+
+    private DecisionRecallService.DecisionRecallItem decision(String topic, String choice, String reason) {
+        return new DecisionRecallService.DecisionRecallItem(
+                topic,
+                choice,
+                reason,
+                "",
+                3,
+                10,
+                List.of("topic"));
     }
 }

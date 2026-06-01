@@ -1,12 +1,11 @@
 package com.sky.decisioncompanion.service.memory;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.sky.decisioncompanion.model.ProfileDecision;
+import com.sky.decisioncompanion.config.MemoryRetrievalProperties;
 import com.sky.decisioncompanion.model.ProfileEmotion;
 import com.sky.decisioncompanion.model.ProfileFear;
 import com.sky.decisioncompanion.model.ProfileRelationship;
 import com.sky.decisioncompanion.model.ProfileValues;
-import com.sky.decisioncompanion.repository.ProfileDecisionRepository;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
@@ -23,40 +22,37 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 
 @Service
 public class MemoryRetrievalService {
 
     private static final Logger logger = LoggerFactory.getLogger(MemoryRetrievalService.class);
-    private static final int MAX_SECTION_ITEMS = 5;
-    private static final int DEFAULT_DECISION_LIMIT = 3;
-    private static final int MAX_TEXT_LENGTH = 200;
-    private static final double DEFAULT_SIMILARITY_THRESHOLD = 0.6;
 
     private final ProfileValuesRepository valuesRepository;
-    private final ProfileDecisionRepository decisionRepository;
     private final ProfileEmotionRepository emotionRepository;
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
     private final VectorStore vectorStore;
+    private final MemoryRetrievalProperties properties;
+    private final DecisionRecallService decisionRecallService;
 
     public MemoryRetrievalService(
             ProfileValuesRepository valuesRepository,
-            ProfileDecisionRepository decisionRepository,
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
-            @Autowired(required = false) @Nullable VectorStore vectorStore) {
+            @Autowired(required = false) @Nullable VectorStore vectorStore,
+            MemoryRetrievalProperties properties,
+            DecisionRecallService decisionRecallService) {
         this.valuesRepository = valuesRepository;
-        this.decisionRepository = decisionRepository;
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
         this.vectorStore = vectorStore;
+        this.properties = properties;
+        this.decisionRecallService = decisionRecallService;
     }
 
     public MemoryContext retrieve(Long userId, String query) {
@@ -74,7 +70,7 @@ public class MemoryRetrievalService {
         try {
             values = getValues(userId);
             emotions = getEmotions(userId);
-            decisions = getDecisions(userId, query, DEFAULT_DECISION_LIMIT);
+            decisions = getDecisions(userId, query);
             relationships = getRelationships(userId);
             fears = getFears(userId);
         } catch (Exception e) {
@@ -82,7 +78,7 @@ public class MemoryRetrievalService {
             logger.warn("长期记忆结构化画像召回失败, userId: {}", userId, e);
         }
 
-        SemanticSearchResult semanticResult = searchSemanticMemories(userId, query, MAX_SECTION_ITEMS);
+        SemanticSearchResult semanticResult = searchSemanticMemories(userId, query, properties.semanticTopK());
         degraded = degraded || semanticResult.degraded();
 
         String promptContext = buildPromptContext(
@@ -127,12 +123,12 @@ public class MemoryRetrievalService {
             return new SemanticSearchResult(List.of(), null, false, true);
         }
 
-        int safeTopK = normalizeTopK(topK);
+        int safeTopK = properties.normalizeSemanticTopK(topK);
         try {
             SearchRequest searchRequest = SearchRequest.builder()
                     .query(query)
                     .topK(safeTopK)
-                    .similarityThreshold(DEFAULT_SIMILARITY_THRESHOLD)
+                    .similarityThreshold(properties.semanticSimilarityThreshold())
                     .filterExpression("userId == '" + userId + "'")
                     .build();
 
@@ -160,10 +156,10 @@ public class MemoryRetrievalService {
                         .eq(ProfileValues::getUserId, userId)
                         .orderByDesc(ProfileValues::getConfidence)
                         .orderByDesc(ProfileValues::getUpdatedAt)
-                        .last("LIMIT " + MAX_SECTION_ITEMS))
+                        .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(value -> Objects.equals(userId, value.getUserId()))
-                .limit(MAX_SECTION_ITEMS)
+                .limit(properties.sectionLimit())
                 .map(value -> new MemoryContext.ProfileMemory(
                         clean(value.getItem()),
                         truncate(value.getPreference()),
@@ -177,10 +173,10 @@ public class MemoryRetrievalService {
         return emotionRepository.selectList(new LambdaQueryWrapper<ProfileEmotion>()
                         .eq(ProfileEmotion::getUserId, userId)
                         .orderByDesc(ProfileEmotion::getUpdatedAt)
-                        .last("LIMIT " + MAX_SECTION_ITEMS))
+                        .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(emotion -> Objects.equals(userId, emotion.getUserId()))
-                .limit(MAX_SECTION_ITEMS)
+                .limit(properties.sectionLimit())
                 .map(emotion -> new MemoryContext.ProfileMemory(
                         clean(emotion.getEmotion()),
                         truncate(emotion.getBehavior()),
@@ -190,33 +186,31 @@ public class MemoryRetrievalService {
                 .toList();
     }
 
-    private List<MemoryContext.DecisionMemory> getDecisions(Long userId, String query, int limit) {
-        List<String> queryTokens = tokens(query);
-        return decisionRepository.selectList(new LambdaQueryWrapper<ProfileDecision>()
-                        .eq(ProfileDecision::getUserId, userId)
-                        .last("LIMIT " + (limit * 3)))
+    private List<MemoryContext.DecisionMemory> getDecisions(Long userId, String query) {
+        return decisionRecallService.recall(userId, query, properties.decision().defaultLimit())
+                .items()
                 .stream()
-                .filter(decision -> Objects.equals(userId, decision.getUserId()))
-                .filter(decision -> queryTokens.isEmpty() || matchesDecision(decision, queryTokens))
-                .limit(limit)
-                .map(decision -> new MemoryContext.DecisionMemory(
-                        clean(decision.getTopic()),
-                        truncate(decision.getChoice()),
-                        truncate(decision.getReason()),
-                        truncate(decision.getOutcome()),
-                        decision.getSatisfaction()))
-                .filter(memory -> StringUtils.hasText(memory.topic()) || StringUtils.hasText(memory.choice()))
+                .map(this::toDecisionMemory)
                 .toList();
+    }
+
+    private MemoryContext.DecisionMemory toDecisionMemory(DecisionRecallService.DecisionRecallItem decision) {
+        return new MemoryContext.DecisionMemory(
+                clean(decision.topic()),
+                truncate(decision.choice()),
+                truncate(decision.reason()),
+                truncate(decision.outcome()),
+                decision.satisfaction());
     }
 
     private List<MemoryContext.RelationshipMemory> getRelationships(Long userId) {
         return relationshipRepository.selectList(new LambdaQueryWrapper<ProfileRelationship>()
                         .eq(ProfileRelationship::getUserId, userId)
                         .orderByDesc(ProfileRelationship::getUpdatedAt)
-                        .last("LIMIT " + MAX_SECTION_ITEMS))
+                        .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(relationship -> Objects.equals(userId, relationship.getUserId()))
-                .limit(MAX_SECTION_ITEMS)
+                .limit(properties.sectionLimit())
                 .map(relationship -> new MemoryContext.RelationshipMemory(
                         clean(relationship.getName()),
                         truncate(relationship.getRole()),
@@ -234,10 +228,10 @@ public class MemoryRetrievalService {
                         .eq(ProfileFear::getUserId, userId)
                         .orderByDesc(ProfileFear::getConfidence)
                         .orderByDesc(ProfileFear::getUpdatedAt)
-                        .last("LIMIT " + MAX_SECTION_ITEMS))
+                        .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(fear -> Objects.equals(userId, fear.getUserId()))
-                .limit(MAX_SECTION_ITEMS)
+                .limit(properties.sectionLimit())
                 .map(fear -> new MemoryContext.ProfileMemory(
                         clean(fear.getType()),
                         truncate(fear.getDescription()),
@@ -303,7 +297,7 @@ public class MemoryRetrievalService {
             return "（暂无高相关记录）";
         }
         return memories.stream()
-                .limit(MAX_SECTION_ITEMS)
+                .limit(properties.sectionLimit())
                 .map(memory -> {
                     String subject = clean(memory.subject());
                     String content = clean(memory.content());
@@ -324,7 +318,7 @@ public class MemoryRetrievalService {
             return "（暂无高相关记录）";
         }
         return memories.stream()
-                .limit(MAX_SECTION_ITEMS)
+                .limit(properties.sectionLimit())
                 .map(memory -> {
                     String line = clean(memory.topic()) + "：" + clean(memory.choice());
                     if (StringUtils.hasText(memory.reason())) {
@@ -342,7 +336,7 @@ public class MemoryRetrievalService {
             return "（暂无高相关记录）";
         }
         return memories.stream()
-                .limit(MAX_SECTION_ITEMS)
+                .limit(properties.sectionLimit())
                 .map(memory -> {
                     String line = clean(memory.name());
                     if (StringUtils.hasText(memory.role())) {
@@ -373,7 +367,7 @@ public class MemoryRetrievalService {
             return "（暂无高相关记录）";
         }
         return memories.stream()
-                .limit(MAX_SECTION_ITEMS)
+                .limit(properties.sectionLimit())
                 .map(memory -> "- " + clean(memory.content()))
                 .toList()
                 .stream()
@@ -398,55 +392,16 @@ public class MemoryRetrievalService {
                 buildPromptContext(values, emotions, decisions, relationships, fears, semanticMemories));
     }
 
-    private boolean matchesDecision(ProfileDecision decision, List<String> queryTokens) {
-        String haystack = (clean(decision.getTopic()) + " "
-                + clean(decision.getChoice()) + " "
-                + clean(decision.getReason())).toLowerCase(Locale.ROOT);
-        return queryTokens.stream().anyMatch(haystack::contains);
-    }
-
-    private List<String> tokens(String query) {
-        String cleaned = clean(query).toLowerCase(Locale.ROOT);
-        if (cleaned.isBlank()) {
-            return List.of();
-        }
-        List<String> tokens = new ArrayList<>();
-        for (String token : cleaned.split("[\\s,，。！？、;；:：]+")) {
-            if (token.length() >= 2) {
-                tokens.add(token);
-            }
-        }
-        for (int i = 0; i < cleaned.length() - 1; i++) {
-            char first = cleaned.charAt(i);
-            char second = cleaned.charAt(i + 1);
-            if (Character.UnicodeScript.of(first) == Character.UnicodeScript.HAN
-                    && Character.UnicodeScript.of(second) == Character.UnicodeScript.HAN) {
-                tokens.add(cleaned.substring(i, i + 2));
-            }
-        }
-        return tokens.stream()
-                .distinct()
-                .sorted(Comparator.comparingInt(String::length).reversed())
-                .toList();
-    }
-
-    private int normalizeTopK(Integer topK) {
-        if (topK == null || topK <= 0) {
-            return DEFAULT_DECISION_LIMIT;
-        }
-        return Math.min(topK, MAX_SECTION_ITEMS);
-    }
-
     private String clean(String value) {
         return value == null ? "" : value.trim();
     }
 
     private String truncate(String value) {
         String cleaned = clean(value);
-        if (cleaned.length() <= MAX_TEXT_LENGTH) {
+        if (cleaned.length() <= properties.textMaxLength()) {
             return cleaned;
         }
-        return cleaned.substring(0, MAX_TEXT_LENGTH);
+        return cleaned.substring(0, properties.textMaxLength());
     }
 
     private Double toDouble(BigDecimal value) {

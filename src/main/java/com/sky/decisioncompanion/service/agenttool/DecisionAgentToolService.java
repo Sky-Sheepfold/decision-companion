@@ -2,16 +2,16 @@ package com.sky.decisioncompanion.service.agenttool;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sky.decisioncompanion.model.ProfileDecision;
+import com.sky.decisioncompanion.config.MemoryRetrievalProperties;
 import com.sky.decisioncompanion.model.ProfileEmotion;
 import com.sky.decisioncompanion.model.ProfileFear;
 import com.sky.decisioncompanion.model.ProfileRelationship;
 import com.sky.decisioncompanion.model.ProfileValues;
-import com.sky.decisioncompanion.repository.ProfileDecisionRepository;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
+import com.sky.decisioncompanion.service.memory.DecisionRecallService;
 import com.sky.decisioncompanion.service.memory.MemoryContext;
 import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
 import com.sky.decisioncompanion.service.profile.ProfileWritePolicy;
@@ -37,8 +37,6 @@ import java.util.stream.Collectors;
 public class DecisionAgentToolService {
 
     private static final Logger logger = LoggerFactory.getLogger(DecisionAgentToolService.class);
-    private static final int DEFAULT_LIMIT = 3;
-    private static final int MAX_LIMIT = 5;
     private static final int MIN_SCORE = 1;
     private static final int MAX_SCORE = 5;
     private static final int MIN_SEMANTIC_CORE_LENGTH = 3;
@@ -48,31 +46,34 @@ public class DecisionAgentToolService {
             "我正在考虑", "我在考虑", "我正在纠结", "我在纠结", "我纠结", "帮我看看", "请帮我看看",
             "是否要", "是否", "要不要", "该不该", "能不能", "可以吗", "吗", "呢");
     private static final List<String> NEGATION_MARKERS = List.of("不", "没", "未", "拒绝", "放弃", "取消");
-    private final ProfileDecisionRepository decisionRepository;
     private final ProfileValuesRepository valuesRepository;
     private final ProfileEmotionRepository emotionRepository;
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
     private final MemoryRetrievalService memoryRetrievalService;
+    private final DecisionRecallService decisionRecallService;
+    private final MemoryRetrievalProperties properties;
     private final AgentToolCallLogService logService;
     private final AgentToolInvocationTracker invocationTracker;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public DecisionAgentToolService(
-            ProfileDecisionRepository decisionRepository,
             ProfileValuesRepository valuesRepository,
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
             MemoryRetrievalService memoryRetrievalService,
+            DecisionRecallService decisionRecallService,
+            MemoryRetrievalProperties properties,
             AgentToolCallLogService logService,
             AgentToolInvocationTracker invocationTracker) {
-        this.decisionRepository = decisionRepository;
         this.valuesRepository = valuesRepository;
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
         this.memoryRetrievalService = memoryRetrievalService;
+        this.decisionRecallService = decisionRecallService;
+        this.properties = properties;
         this.logService = logService;
         this.invocationTracker = invocationTracker;
     }
@@ -80,7 +81,7 @@ public class DecisionAgentToolService {
     @Tool(name = "searchDecisionHistory", description = "查询当前用户的历史决策记录，用于识别相似选择和决策模式。该工具只读，不会写入或修改任何档案。")
     public DecisionHistoryToolResult searchDecisionHistory(
             @ToolParam(description = "与当前决策相关的查询文本") String query,
-            @ToolParam(required = false, description = "最多返回多少条结果，默认 3 条，最多 5 条") Integer limit,
+            @ToolParam(required = false, description = "最多返回多少条结果，默认和上限受后端记忆召回配置控制") Integer limit,
             ToolContext toolContext) {
         long start = System.nanoTime();
         AgentToolContext.Execution context = AgentToolContext.from(toolContext);
@@ -88,16 +89,10 @@ public class DecisionAgentToolService {
         String inputSummary = "query=" + query + ", limit=" + limit;
 
         try {
-            int safeLimit = normalizeLimit(limit);
-            List<String> queryTokens = tokens(query);
-            List<DecisionHistoryItem> items = decisionRepository.selectList(
-                            new LambdaQueryWrapper<ProfileDecision>()
-                                    .eq(ProfileDecision::getUserId, context.userId())
-                                    .last("LIMIT " + (safeLimit * 3)))
+            int safeLimit = properties.decision().normalizeLimit(limit);
+            List<DecisionHistoryItem> items = decisionRecallService.recall(context.userId(), query, safeLimit)
+                    .items()
                     .stream()
-                    .filter(decision -> Objects.equals(context.userId(), decision.getUserId()))
-                    .filter(decision -> matchesDecision(decision, queryTokens))
-                    .limit(safeLimit)
                     .map(this::toDecisionHistoryItem)
                     .toList();
 
@@ -118,7 +113,7 @@ public class DecisionAgentToolService {
     @Tool(name = "searchSemanticMemory", description = "从向量存储中检索当前用户的长期场景记忆，用于补充结构化画像之外的相似经历和证据。该工具只读，不会写入或修改任何档案。")
     public SemanticMemoryToolResult searchSemanticMemory(
             @ToolParam(description = "当前决策、复盘或困惑的查询文本") String query,
-            @ToolParam(required = false, description = "最多返回多少条语义记忆，默认 3 条，最多 5 条") Integer topK,
+            @ToolParam(required = false, description = "最多返回多少条语义记忆，默认和上限受后端记忆召回配置控制") Integer topK,
             ToolContext toolContext) {
         long start = System.nanoTime();
         AgentToolContext.Execution context = AgentToolContext.from(toolContext);
@@ -126,7 +121,7 @@ public class DecisionAgentToolService {
         String inputSummary = "query=" + query + ", topK=" + topK;
 
         try {
-            int safeTopK = normalizeLimit(topK);
+            int safeTopK = properties.normalizeSemanticTopK(topK);
             String duplicateReason = duplicateSemanticRecallReason(context, query);
             if (duplicateReason != null) {
                 String message = "本轮已召回相关场景记忆，已跳过重复查询";
@@ -274,13 +269,13 @@ public class DecisionAgentToolService {
         }
     }
 
-    private DecisionHistoryItem toDecisionHistoryItem(ProfileDecision decision) {
+    private DecisionHistoryItem toDecisionHistoryItem(DecisionRecallService.DecisionRecallItem decision) {
         return new DecisionHistoryItem(
-                decision.getTopic(),
-                decision.getChoice(),
-                decision.getReason(),
-                decision.getOutcome(),
-                decision.getSatisfaction());
+                decision.topic(),
+                decision.choice(),
+                decision.reason(),
+                decision.outcome(),
+                decision.satisfaction());
     }
 
     private void markToolCalled(AgentToolContext.Execution context, String toolName) {
@@ -484,41 +479,6 @@ public class DecisionAgentToolService {
                 .filter(value -> normalizeKey(value.getDescription()).equals(normalizeKey(description)))
                 .findFirst()
                 .orElse(null);
-    }
-
-    private boolean matchesDecision(ProfileDecision decision, List<String> queryTokens) {
-        if (queryTokens.isEmpty()) {
-            return true;
-        }
-        String haystack = String.join(" ",
-                safe(decision.getTopic()),
-                safe(decision.getChoice()),
-                safe(decision.getReason()),
-                safe(decision.getOutcome()),
-                safe(decision.getTags())).toLowerCase(Locale.ROOT);
-        return queryTokens.stream().anyMatch(haystack::contains);
-    }
-
-    private List<String> tokens(String query) {
-        if (!StringUtils.hasText(query)) {
-            return List.of();
-        }
-        String normalized = query.toLowerCase(Locale.ROOT);
-        String[] rawTokens = normalized.split("[\\s,，。；;、]+");
-        List<String> result = new ArrayList<>();
-        for (String token : rawTokens) {
-            if (StringUtils.hasText(token)) {
-                result.add(token);
-            }
-        }
-        return result;
-    }
-
-    private int normalizeLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
-            return DEFAULT_LIMIT;
-        }
-        return Math.min(limit, MAX_LIMIT);
     }
 
     private String duplicateSemanticRecallReason(AgentToolContext.Execution context, String query) {
