@@ -8,6 +8,7 @@ import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
+import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,8 +16,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.VectorStore;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -26,6 +25,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -57,14 +57,14 @@ class ProfileExtractServiceTest {
     private ProfileFearRepository fearRepository;
 
     @Mock
-    private VectorStore vectorStore;
+    private ProfileSceneMemoryService profileSceneMemoryService;
 
     private ProfileExtractService service;
 
     @BeforeEach
     void setUp() {
         lenient().when(chatClientBuilder.build()).thenReturn(chatClient);
-        service = serviceWithVector(vectorStore);
+        service = serviceWithSceneMemory(profileSceneMemoryService);
     }
 
     @Test
@@ -97,7 +97,7 @@ class ProfileExtractServiceTest {
         verify(valuesRepository, never()).updateById(any(ProfileValues.class));
         verify(fearRepository, never()).insert(any(ProfileFear.class));
         verify(fearRepository, never()).updateById(any(ProfileFear.class));
-        verifyNoInteractions(vectorStore);
+        verifyNoInteractions(profileSceneMemoryService);
     }
 
     @Test
@@ -121,7 +121,7 @@ class ProfileExtractServiceTest {
         assertThat(saved).isZero();
         verify(fearRepository, never()).insert(any(ProfileFear.class));
         verify(fearRepository, never()).updateById(any(ProfileFear.class));
-        verifyNoInteractions(vectorStore);
+        verifyNoInteractions(profileSceneMemoryService);
     }
 
     @Test
@@ -159,7 +159,7 @@ class ProfileExtractServiceTest {
         assertThat(updated.getPreference()).isEqualTo("更看重长期确定性");
         assertThat(updated.getConfidence()).isEqualByComparingTo("0.90");
         assertThat(updated.getEvidence()).contains("我还是想稳定一点");
-        verify(vectorStore).add(argThat(documents -> containsProfileRecordCount(documents, 1)));
+        verify(profileSceneMemoryService).saveSceneMemory(argThat(memory -> memory.profileRecordCount() == 1));
     }
 
     @Test
@@ -182,23 +182,20 @@ class ProfileExtractServiceTest {
         int saved = service.saveAnalysis(USER_ID, "我怕离家太远以后没时间陪父母", analysis);
 
         assertThat(saved).isEqualTo(1);
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
-        verify(vectorStore).add(captor.capture());
-        Document document = captor.getValue().get(0);
+        ArgumentCaptor<ProfileSceneMemoryService.SceneMemoryWrite> captor =
+                ArgumentCaptor.forClass(ProfileSceneMemoryService.SceneMemoryWrite.class);
+        verify(profileSceneMemoryService).saveSceneMemory(captor.capture());
+        ProfileSceneMemoryService.SceneMemoryWrite memory = captor.getValue();
 
-        assertThat(document.getMetadata())
-                .containsEntry("type", "conversation_scene")
-                .containsEntry("memoryRole", "scene_evidence")
-                .containsEntry("source", "profile_extract")
-                .containsEntry("profileRecordCount", 1);
-        assertThat(document.getText())
-                .contains("场景记忆")
-                .contains("关键证据")
-                .contains("我怕离家太远以后没时间陪父母")
-                .contains("关联画像类型: values")
-                .doesNotContain("用户ID:")
-                .doesNotContain("价值观: [城市偏好:希望离父母近一点]");
+        assertThat(memory.userId()).isEqualTo(USER_ID);
+        assertThat(memory.userMessage()).isEqualTo("我怕离家太远以后没时间陪父母");
+        assertThat(memory.source()).isEqualTo("profile_extract");
+        assertThat(memory.profileRecordCount()).isEqualTo(1);
+        assertThat(memory.profileTypes()).containsExactly("values");
+        assertThat(memory.memoryType()).isEqualTo("values");
+        assertThat(memory.confidence()).isEqualByComparingTo("0.92");
+        assertThat(memory.evidence()).containsExactly("我怕离家太远以后没时间陪父母");
+        assertThat(memory.sceneSignals()).containsExactly("value:城市偏好:希望离父母近一点");
     }
 
     @Test
@@ -227,13 +224,15 @@ class ProfileExtractServiceTest {
 
         assertThat(saved).isZero();
         verify(decisionRepository, never()).insert(any(ProfileDecision.class));
-        verifyNoInteractions(vectorStore);
+        verifyNoInteractions(profileSceneMemoryService);
     }
 
     @Test
-    void validRecordPersistsWhenVectorStoreIsUnavailable() {
-        ProfileExtractService serviceWithoutVector = serviceWithVector(null);
+    void validRecordPersistsWhenSceneMemoryWriteFails() {
         when(valuesRepository.selectList(any())).thenReturn(List.of());
+        doThrow(new RuntimeException("chroma down"))
+                .when(profileSceneMemoryService)
+                .saveSceneMemory(any(ProfileSceneMemoryService.SceneMemoryWrite.class));
 
         String analysis = """
                 {
@@ -248,7 +247,7 @@ class ProfileExtractServiceTest {
                 }
                 """;
 
-        int saved = serviceWithoutVector.saveAnalysis(USER_ID, "我不想每天被排满", analysis);
+        int saved = service.saveAnalysis(USER_ID, "我不想每天被排满", analysis);
 
         assertThat(saved).isEqualTo(1);
         ArgumentCaptor<ProfileValues> captor = ArgumentCaptor.forClass(ProfileValues.class);
@@ -257,7 +256,7 @@ class ProfileExtractServiceTest {
         assertThat(captor.getValue().getEvidence()).contains("我不想每天被排满");
     }
 
-    private ProfileExtractService serviceWithVector(VectorStore vectorStore) {
+    private ProfileExtractService serviceWithSceneMemory(ProfileSceneMemoryService profileSceneMemoryService) {
         return new ProfileExtractService(
                 chatClientBuilder,
                 valuesRepository,
@@ -265,11 +264,6 @@ class ProfileExtractServiceTest {
                 emotionRepository,
                 relationshipRepository,
                 fearRepository,
-                vectorStore);
-    }
-
-    private boolean containsProfileRecordCount(List<Document> documents, int count) {
-        return documents.size() == 1
-                && Integer.valueOf(count).equals(documents.get(0).getMetadata().get("profileRecordCount"));
+                profileSceneMemoryService);
     }
 }

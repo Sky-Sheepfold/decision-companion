@@ -9,6 +9,7 @@ import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import com.sky.decisioncompanion.service.memory.DecisionRecallService;
 import com.sky.decisioncompanion.service.memory.MemoryContext;
 import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
+import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -48,6 +49,9 @@ class DecisionAgentToolServiceTest {
     private MemoryRetrievalService memoryRetrievalService;
 
     @Mock
+    private ProfileSceneMemoryService profileSceneMemoryService;
+
+    @Mock
     private DecisionRecallService decisionRecallService;
 
     @Mock
@@ -68,6 +72,7 @@ class DecisionAgentToolServiceTest {
                 relationshipRepository,
                 fearRepository,
                 memoryRetrievalService,
+                profileSceneMemoryService,
                 decisionRecallService,
                 properties,
                 logService,
@@ -322,6 +327,17 @@ class DecisionAgentToolServiceTest {
         verify(logService).recordSuccess(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
                 contains("profileType=value"),
                 contains("written value:城市偏好"), anyLong());
+        verify(profileSceneMemoryService).saveSceneMemory(argThat(memory ->
+                USER_ID.equals(memory.userId())
+                        && "我正在考虑是否接受外地 offer".equals(memory.userMessage())
+                        && "agent_tool_update".equals(memory.source())
+                        && memory.profileRecordCount() == 1
+                        && memory.profileTypes().equals(List.of("value"))
+                        && "value".equals(memory.memoryType())
+                        && memory.confidence().compareTo(new BigDecimal("0.95")) == 0
+                        && CONVERSATION_ID.equals(memory.sourceConversationId())
+                        && memory.evidence().equals(List.of("我怕离家太远"))
+                        && memory.sceneSignals().equals(List.of("value:城市偏好:更偏向离家近的城市"))));
         verify(toolInvocationTracker).markCalled("req-1", "updateUserProfile");
     }
 
@@ -344,6 +360,7 @@ class DecisionAgentToolServiceTest {
         verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
                 contains("profileType=value"),
                 contains("needs_confirmation"), anyLong());
+        verify(profileSceneMemoryService, never()).saveSceneMemory(any());
     }
 
     @Test
@@ -365,6 +382,7 @@ class DecisionAgentToolServiceTest {
         verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
                 contains("profileType=value"),
                 contains("confidence too low"), anyLong());
+        verify(profileSceneMemoryService, never()).saveSceneMemory(any());
     }
 
     private ToolContext toolContext() {

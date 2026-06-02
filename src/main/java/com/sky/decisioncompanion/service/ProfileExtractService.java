@@ -8,24 +8,19 @@ import com.sky.decisioncompanion.repository.*;
 import com.sky.decisioncompanion.service.profile.ProfileAnalysisParser;
 import com.sky.decisioncompanion.service.profile.ProfileAnalysisParser.Analysis;
 import com.sky.decisioncompanion.service.profile.ProfileWritePolicy;
+import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 
 @Service
 public class ProfileExtractService {
@@ -33,9 +28,6 @@ public class ProfileExtractService {
     private static final Logger logger = LoggerFactory.getLogger(ProfileExtractService.class);
     private static final List<String> DECISION_KEYWORDS = List.of(
             "决定", "决策", "选择", "纠结", "要不要", "offer", "离职", "转行", "工作", "城市", "学校");
-    private static final String VECTOR_MEMORY_TYPE = "conversation_scene";
-    private static final String VECTOR_MEMORY_ROLE = "scene_evidence";
-    private static final String VECTOR_MEMORY_SOURCE = "profile_extract";
 
     private final ChatClient chatClient;
     private final ProfileValuesRepository valuesRepository;
@@ -43,7 +35,7 @@ public class ProfileExtractService {
     private final ProfileEmotionRepository emotionRepository;
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
-    private final VectorStore vectorStore;
+    private final ProfileSceneMemoryService profileSceneMemoryService;
     private final ObjectMapper objectMapper;
     private final ProfileAnalysisParser analysisParser;
 
@@ -54,14 +46,14 @@ public class ProfileExtractService {
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
-            @Autowired(required = false) @Nullable VectorStore vectorStore) {
+            ProfileSceneMemoryService profileSceneMemoryService) {
         this.chatClient = chatClientBuilder.build();
         this.valuesRepository = valuesRepository;
         this.decisionRepository = decisionRepository;
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
-        this.vectorStore = vectorStore;
+        this.profileSceneMemoryService = profileSceneMemoryService;
         this.objectMapper = new ObjectMapper();
         this.analysisParser = new ProfileAnalysisParser();
     }
@@ -354,23 +346,19 @@ public class ProfileExtractService {
     }
 
     private void saveToVectorStore(Long userId, String userMessage, Analysis analysis, int savedCount) {
-        if (this.vectorStore == null) {
-            logger.warn("向量存储服务暂不可用，跳过存储, userId: {}", userId);
-            return;
-        }
-
         try {
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("userId", String.valueOf(userId));
-            metadata.put("type", VECTOR_MEMORY_TYPE);
-            metadata.put("memoryRole", VECTOR_MEMORY_ROLE);
-            metadata.put("source", VECTOR_MEMORY_SOURCE);
-            metadata.put("profileRecordCount", savedCount);
-
-            Document document = new Document(
-                    buildSceneMemorySummary(userMessage, analysis, savedCount),
-                    metadata);
-            vectorStore.add(java.util.List.of(document));
+            List<String> profileTypes = summarizeProfileTypes(analysis);
+            profileSceneMemoryService.saveSceneMemory(new ProfileSceneMemoryService.SceneMemoryWrite(
+                    userId,
+                    userMessage,
+                    "profile_extract",
+                    savedCount,
+                    profileTypes,
+                    summarizeEvidence(analysis),
+                    summarizeSceneSignals(analysis),
+                    primaryMemoryType(profileTypes),
+                    maxConfidence(analysis),
+                    null));
         } catch (Exception e) {
             logger.error("向量存储失败, userId: {}", userId, e);
         }
@@ -580,23 +568,7 @@ public class ProfileExtractService {
         return cleanedReason + "\n证据：" + cleanedEvidence;
     }
 
-    private String buildSceneMemorySummary(String userMessage, Analysis analysis, int savedCount) {
-        return """
-                场景记忆（用于相似情境召回，不作为结构化画像结论）
-                用户表达: %s
-                关键证据: %s
-                关联画像类型: %s
-                场景线索: %s
-                有效档案更新数: %d
-                """.formatted(
-                truncate(userMessage, 500),
-                summarizeEvidence(analysis),
-                summarizeProfileTypes(analysis),
-                summarizeSceneSignals(analysis),
-                savedCount);
-    }
-
-    private String summarizeProfileTypes(Analysis analysis) {
+    private List<String> summarizeProfileTypes(Analysis analysis) {
         List<String> types = new ArrayList<>();
         if (!analysis.values().isEmpty()) {
             types.add("values");
@@ -613,13 +585,20 @@ public class ProfileExtractService {
         if (!analysis.fears().isEmpty()) {
             types.add("fears");
         }
-        if (types.isEmpty()) {
-            return "[]";
-        }
-        return String.join(", ", types);
+        return types;
     }
 
-    private String summarizeEvidence(Analysis analysis) {
+    private String primaryMemoryType(List<String> profileTypes) {
+        if (profileTypes.isEmpty()) {
+            return "";
+        }
+        if (profileTypes.size() == 1) {
+            return profileTypes.get(0);
+        }
+        return "mixed";
+    }
+
+    private List<String> summarizeEvidence(Analysis analysis) {
         List<String> evidence = new ArrayList<>();
         collectEvidence(evidence, analysis.values());
         collectEvidence(evidence, analysis.emotions());
@@ -627,13 +606,12 @@ public class ProfileExtractService {
         collectEvidence(evidence, analysis.relationships());
         collectEvidence(evidence, analysis.fears());
         if (evidence.isEmpty()) {
-            return "[]";
+            return List.of();
         }
         return evidence.stream()
                 .distinct()
                 .limit(8)
-                .toList()
-                .toString();
+                .toList();
     }
 
     private void collectEvidence(List<String> target, List<JsonNode> nodes) {
@@ -642,7 +620,7 @@ public class ProfileExtractService {
         }
     }
 
-    private String summarizeSceneSignals(Analysis analysis) {
+    private List<String> summarizeSceneSignals(Analysis analysis) {
         List<String> signals = new ArrayList<>();
         addSceneSignals(signals, "value", analysis.values(), "item", "preference");
         addSceneSignals(signals, "emotion", analysis.emotions(), "emotion", "behavior");
@@ -650,12 +628,11 @@ public class ProfileExtractService {
         addSceneSignals(signals, "relationship", analysis.relationships(), "name", "role");
         addSceneSignals(signals, "fear", analysis.fears(), "type", "description");
         if (signals.isEmpty()) {
-            return "[]";
+            return List.of();
         }
         return signals.stream()
                 .limit(8)
-                .toList()
-                .toString();
+                .toList();
     }
 
     private void addSceneSignals(List<String> target, String type, List<JsonNode> nodes, String firstKey, String secondKey) {
@@ -665,6 +642,38 @@ public class ProfileExtractService {
             if (!first.isBlank() || !second.isBlank()) {
                 target.add(type + ":" + first + ":" + second);
             }
+        }
+    }
+
+    private BigDecimal maxConfidence(Analysis analysis) {
+        BigDecimal max = null;
+        max = max(max, maxConfidence(analysis.values()));
+        max = max(max, maxConfidence(analysis.emotions()));
+        max = max(max, maxConfidence(analysis.relationships()));
+        max = max(max, maxConfidence(analysis.fears()));
+        return max;
+    }
+
+    private BigDecimal maxConfidence(List<JsonNode> nodes) {
+        BigDecimal max = null;
+        for (JsonNode node : nodes) {
+            BigDecimal confidence = confidence(node);
+            if (confidence != null) {
+                max = max(max, confidence);
+            }
+        }
+        return max;
+    }
+
+    private BigDecimal confidence(JsonNode node) {
+        String value = text(node, "confidence");
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(value);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 }

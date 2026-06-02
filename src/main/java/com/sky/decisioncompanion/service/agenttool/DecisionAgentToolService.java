@@ -14,6 +14,7 @@ import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import com.sky.decisioncompanion.service.memory.DecisionRecallService;
 import com.sky.decisioncompanion.service.memory.MemoryContext;
 import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
+import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
 import com.sky.decisioncompanion.service.profile.ProfileWritePolicy;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -51,6 +52,7 @@ public class DecisionAgentToolService {
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
     private final MemoryRetrievalService memoryRetrievalService;
+    private final ProfileSceneMemoryService profileSceneMemoryService;
     private final DecisionRecallService decisionRecallService;
     private final MemoryRetrievalProperties properties;
     private final AgentToolCallLogService logService;
@@ -63,6 +65,7 @@ public class DecisionAgentToolService {
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
             MemoryRetrievalService memoryRetrievalService,
+            ProfileSceneMemoryService profileSceneMemoryService,
             DecisionRecallService decisionRecallService,
             MemoryRetrievalProperties properties,
             AgentToolCallLogService logService,
@@ -72,6 +75,7 @@ public class DecisionAgentToolService {
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
         this.memoryRetrievalService = memoryRetrievalService;
+        this.profileSceneMemoryService = profileSceneMemoryService;
         this.decisionRecallService = decisionRecallService;
         this.properties = properties;
         this.logService = logService;
@@ -247,6 +251,7 @@ public class DecisionAgentToolService {
             };
 
             if (outcome.updated()) {
+                saveToolSceneMemory(context, normalizedType, subject, content, confidence, evidence);
                 logService.recordSuccess(context.userId(), context.conversationId(), "updateUserProfile",
                         inputSummary, "written " + normalizedType + ":" + outcome.subject(),
                         elapsedMillis(start));
@@ -437,6 +442,28 @@ public class DecisionAgentToolService {
         existing.setUpdatedAt(LocalDateTime.now());
         fearRepository.updateById(existing);
         return new UpdateOutcome(true, "已更新恐惧与边界画像", "written", description);
+    }
+
+    private void saveToolSceneMemory(
+            AgentToolContext.Execution context,
+            String profileType,
+            String subject,
+            String content,
+            Double confidence,
+            List<String> evidence) {
+        String safeSubject = truncate(subject, 100);
+        String safeContent = truncate(content, 500);
+        profileSceneMemoryService.saveSceneMemory(new ProfileSceneMemoryService.SceneMemoryWrite(
+                context.userId(),
+                context.message(),
+                "agent_tool_update",
+                1,
+                List.of(profileType),
+                safeList(evidence, 5),
+                List.of(profileType + ":" + safeSubject + ":" + safeContent),
+                profileType,
+                normalizeConfidence(confidence),
+                context.conversationId()));
     }
 
     private ProfileValues findValue(Long userId, String item) {
