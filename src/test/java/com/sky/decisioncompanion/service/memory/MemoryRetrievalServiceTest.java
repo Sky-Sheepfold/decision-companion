@@ -4,10 +4,12 @@ import com.sky.decisioncompanion.config.MemoryRetrievalProperties;
 import com.sky.decisioncompanion.model.ProfileEmotion;
 import com.sky.decisioncompanion.model.ProfileFear;
 import com.sky.decisioncompanion.model.ProfileRelationship;
+import com.sky.decisioncompanion.model.ProfileSceneMemoryLink;
 import com.sky.decisioncompanion.model.ProfileValues;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
+import com.sky.decisioncompanion.repository.ProfileSceneMemoryLinkRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +46,9 @@ class MemoryRetrievalServiceTest {
 
     @Mock
     private ProfileRelationshipRepository relationshipRepository;
+
+    @Mock
+    private ProfileSceneMemoryLinkRepository sceneMemoryLinkRepository;
 
     @Mock
     private VectorStore vectorStore;
@@ -217,12 +222,32 @@ class MemoryRetrievalServiceTest {
         verify(decisionRecallService).recall(eq(USER_ID), eq("query"), eq(3));
     }
 
+    @Test
+    void searchSemanticMemoriesOmitsInactiveLinkedSceneMemories() {
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                Document.builder().id("doc-deleted").text("已删除场景").score(0.9).build(),
+                Document.builder().id("doc-active").text("仍有效场景").score(0.8).build(),
+                Document.builder().id("doc-legacy").text("历史无关联场景").score(0.7).build()));
+        when(sceneMemoryLinkRepository.selectOne(any())).thenReturn(
+                sceneMemoryLink(false, "delete_failed"),
+                sceneMemoryLink(true, "active"),
+                null);
+
+        MemoryRetrievalService.SemanticSearchResult result = service.searchSemanticMemories(USER_ID, "query", 5);
+
+        assertThat(result.memories()).extracting(MemoryContext.SemanticMemory::content)
+                .containsExactly("仍有效场景", "历史无关联场景");
+        assertThat(result.maxScore()).isEqualTo(0.8);
+        assertThat(result.degraded()).isFalse();
+    }
+
     private MemoryRetrievalService service(MemoryRetrievalProperties properties, VectorStore vectorStore) {
         return new MemoryRetrievalService(
                 valuesRepository,
                 emotionRepository,
                 relationshipRepository,
                 fearRepository,
+                sceneMemoryLinkRepository,
                 vectorStore,
                 properties,
                 decisionRecallService);
@@ -288,5 +313,13 @@ class MemoryRetrievalServiceTest {
                 null,
                 10,
                 List.of("topic"));
+    }
+
+    private ProfileSceneMemoryLink sceneMemoryLink(boolean active, String deleteStatus) {
+        ProfileSceneMemoryLink link = new ProfileSceneMemoryLink();
+        link.setUserId(USER_ID);
+        link.setActive(active);
+        link.setDeleteStatus(deleteStatus);
+        return link;
     }
 }

@@ -5,10 +5,12 @@ import com.sky.decisioncompanion.config.MemoryRetrievalProperties;
 import com.sky.decisioncompanion.model.ProfileEmotion;
 import com.sky.decisioncompanion.model.ProfileFear;
 import com.sky.decisioncompanion.model.ProfileRelationship;
+import com.sky.decisioncompanion.model.ProfileSceneMemoryLink;
 import com.sky.decisioncompanion.model.ProfileValues;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
+import com.sky.decisioncompanion.repository.ProfileSceneMemoryLinkRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +36,7 @@ public class MemoryRetrievalService {
     private final ProfileEmotionRepository emotionRepository;
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
+    private final ProfileSceneMemoryLinkRepository sceneMemoryLinkRepository;
     private final VectorStore vectorStore;
     private final MemoryRetrievalProperties properties;
     private final DecisionRecallService decisionRecallService;
@@ -43,6 +46,7 @@ public class MemoryRetrievalService {
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
+            ProfileSceneMemoryLinkRepository sceneMemoryLinkRepository,
             @Autowired(required = false) @Nullable VectorStore vectorStore,
             MemoryRetrievalProperties properties,
             DecisionRecallService decisionRecallService) {
@@ -50,6 +54,7 @@ public class MemoryRetrievalService {
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
+        this.sceneMemoryLinkRepository = sceneMemoryLinkRepository;
         this.vectorStore = vectorStore;
         this.properties = properties;
         this.decisionRecallService = decisionRecallService;
@@ -135,6 +140,7 @@ public class MemoryRetrievalService {
             List<MemoryContext.SemanticMemory> memories = vectorStore.similaritySearch(searchRequest)
                     .stream()
                     .filter(Objects::nonNull)
+                    .filter(this::isActiveSceneMemory)
                     .limit(safeTopK)
                     .map(this::toSemanticMemory)
                     .filter(memory -> StringUtils.hasText(memory.content()))
@@ -261,6 +267,18 @@ public class MemoryRetrievalService {
                 type == null ? "memory" : type.toString(),
                 toInteger(recordCount),
                 document.getScore());
+    }
+
+    private boolean isActiveSceneMemory(Document document) {
+        if (!StringUtils.hasText(document.getId())) {
+            return true;
+        }
+        ProfileSceneMemoryLink link = sceneMemoryLinkRepository.selectOne(new LambdaQueryWrapper<ProfileSceneMemoryLink>()
+                .eq(ProfileSceneMemoryLink::getDocumentId, document.getId()));
+        if (link == null) {
+            return true;
+        }
+        return Boolean.TRUE.equals(link.getActive()) && "active".equals(link.getDeleteStatus());
     }
 
     private String buildPromptContext(
