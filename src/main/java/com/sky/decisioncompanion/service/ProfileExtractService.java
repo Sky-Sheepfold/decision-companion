@@ -358,6 +358,7 @@ public class ProfileExtractService {
                     summarizeSceneSignals(analysis),
                     primaryMemoryType(profileTypes),
                     maxConfidence(analysis),
+                    null,
                     null));
         } catch (Exception e) {
             logger.error("向量存储失败, userId: {}", userId, e);

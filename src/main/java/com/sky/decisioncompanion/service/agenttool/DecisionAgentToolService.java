@@ -463,7 +463,8 @@ public class DecisionAgentToolService {
                 List.of(profileType + ":" + safeSubject + ":" + safeContent),
                 profileType,
                 normalizeConfidence(confidence),
-                context.conversationId()));
+                context.conversationId(),
+                null));
     }
 
     private ProfileValues findValue(Long userId, String item) {
