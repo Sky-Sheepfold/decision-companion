@@ -154,11 +154,13 @@ public class MemoryRetrievalService {
     private List<MemoryContext.ProfileMemory> getValues(Long userId) {
         return valuesRepository.selectList(new LambdaQueryWrapper<ProfileValues>()
                         .eq(ProfileValues::getUserId, userId)
+                        .eq(ProfileValues::getActive, true)
                         .orderByDesc(ProfileValues::getConfidence)
                         .orderByDesc(ProfileValues::getUpdatedAt)
                         .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(value -> Objects.equals(userId, value.getUserId()))
+                .filter(value -> Boolean.TRUE.equals(value.getActive()))
                 .limit(properties.sectionLimit())
                 .map(value -> new MemoryContext.ProfileMemory(
                         clean(value.getItem()),
@@ -172,10 +174,12 @@ public class MemoryRetrievalService {
     private List<MemoryContext.ProfileMemory> getEmotions(Long userId) {
         return emotionRepository.selectList(new LambdaQueryWrapper<ProfileEmotion>()
                         .eq(ProfileEmotion::getUserId, userId)
+                        .eq(ProfileEmotion::getActive, true)
                         .orderByDesc(ProfileEmotion::getUpdatedAt)
                         .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(emotion -> Objects.equals(userId, emotion.getUserId()))
+                .filter(emotion -> Boolean.TRUE.equals(emotion.getActive()))
                 .limit(properties.sectionLimit())
                 .map(emotion -> new MemoryContext.ProfileMemory(
                         clean(emotion.getEmotion()),
@@ -206,10 +210,12 @@ public class MemoryRetrievalService {
     private List<MemoryContext.RelationshipMemory> getRelationships(Long userId) {
         return relationshipRepository.selectList(new LambdaQueryWrapper<ProfileRelationship>()
                         .eq(ProfileRelationship::getUserId, userId)
+                        .eq(ProfileRelationship::getActive, true)
                         .orderByDesc(ProfileRelationship::getUpdatedAt)
                         .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(relationship -> Objects.equals(userId, relationship.getUserId()))
+                .filter(relationship -> Boolean.TRUE.equals(relationship.getActive()))
                 .limit(properties.sectionLimit())
                 .map(relationship -> new MemoryContext.RelationshipMemory(
                         clean(relationship.getName()),
@@ -226,11 +232,13 @@ public class MemoryRetrievalService {
     private List<MemoryContext.ProfileMemory> getFears(Long userId) {
         return fearRepository.selectList(new LambdaQueryWrapper<ProfileFear>()
                         .eq(ProfileFear::getUserId, userId)
+                        .eq(ProfileFear::getActive, true)
                         .orderByDesc(ProfileFear::getConfidence)
                         .orderByDesc(ProfileFear::getUpdatedAt)
                         .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(fear -> Objects.equals(userId, fear.getUserId()))
+                .filter(fear -> Boolean.TRUE.equals(fear.getActive()))
                 .limit(properties.sectionLimit())
                 .map(fear -> new MemoryContext.ProfileMemory(
                         clean(fear.getType()),

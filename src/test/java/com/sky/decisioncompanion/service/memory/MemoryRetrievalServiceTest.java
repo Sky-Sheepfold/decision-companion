@@ -107,6 +107,44 @@ class MemoryRetrievalServiceTest {
     }
 
     @Test
+    void retrieveOmitsInactiveFormalProfileRecordsFromPromptContext() {
+        ProfileValues activeValue = value("城市偏好", "更看重离家近", "0.90");
+        ProfileValues inactiveValue = value("过期偏好", "曾经想远离家庭", "0.40");
+        inactiveValue.setActive(false);
+        ProfileEmotion activeEmotion = emotion("焦虑", "被催促时容易压力变大");
+        ProfileEmotion inactiveEmotion = emotion("兴奋", "已失效的冲动模式");
+        inactiveEmotion.setActive(false);
+        ProfileRelationship activeRelationship = relationship("妈妈", "母亲", "高", "从安全和稳定角度影响选择", "希望不要离家太远");
+        ProfileRelationship inactiveRelationship = relationship("前同事", "同事", "低", "已失效的建议影响", "不再联系");
+        inactiveRelationship.setActive(false);
+        ProfileFear activeFear = fear("fear", "害怕离家太远", "0.80");
+        ProfileFear inactiveFear = fear("boundary", "已撤销的边界", "0.20");
+        inactiveFear.setActive(false);
+
+        when(valuesRepository.selectList(any())).thenReturn(List.of(activeValue, inactiveValue));
+        when(emotionRepository.selectList(any())).thenReturn(List.of(activeEmotion, inactiveEmotion));
+        when(relationshipRepository.selectList(any())).thenReturn(List.of(activeRelationship, inactiveRelationship));
+        when(fearRepository.selectList(any())).thenReturn(List.of(activeFear, inactiveFear));
+        when(decisionRecallService.recall(USER_ID, "query", 3)).thenReturn(decisionResult());
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        MemoryContext context = service.retrieve(USER_ID, "query");
+
+        assertThat(context.promptContext()).contains("更看重离家近");
+        assertThat(context.promptContext()).contains("被催促时容易压力变大");
+        assertThat(context.promptContext()).contains("从安全和稳定角度影响选择");
+        assertThat(context.promptContext()).contains("害怕离家太远");
+        assertThat(context.promptContext()).doesNotContain("曾经想远离家庭");
+        assertThat(context.promptContext()).doesNotContain("已失效的冲动模式");
+        assertThat(context.promptContext()).doesNotContain("已失效的建议影响");
+        assertThat(context.promptContext()).doesNotContain("已撤销的边界");
+        assertThat(context.metrics().valueCount()).isEqualTo(1);
+        assertThat(context.metrics().emotionCount()).isEqualTo(1);
+        assertThat(context.metrics().relationshipCount()).isEqualTo(1);
+        assertThat(context.metrics().fearCount()).isEqualTo(1);
+    }
+
+    @Test
     void retrieveFallsBackToStructuredProfilesWhenVectorStoreIsMissing() {
         MemoryRetrievalService serviceWithoutVector = service(new MemoryRetrievalProperties(), null);
         when(valuesRepository.selectList(any())).thenReturn(List.of(value("稳定性", "偏好长期确定性", "0.85")));
@@ -193,6 +231,7 @@ class MemoryRetrievalServiceTest {
     private ProfileValues value(String item, String preference, String confidence) {
         ProfileValues value = new ProfileValues();
         value.setUserId(USER_ID);
+        value.setActive(true);
         value.setItem(item);
         value.setPreference(preference);
         value.setConfidence(new BigDecimal(confidence));
@@ -202,6 +241,7 @@ class MemoryRetrievalServiceTest {
     private ProfileEmotion emotion(String name, String behavior) {
         ProfileEmotion emotion = new ProfileEmotion();
         emotion.setUserId(USER_ID);
+        emotion.setActive(true);
         emotion.setEmotion(name);
         emotion.setBehavior(behavior);
         return emotion;
@@ -210,6 +250,7 @@ class MemoryRetrievalServiceTest {
     private ProfileFear fear(String type, String description, String confidence) {
         ProfileFear fear = new ProfileFear();
         fear.setUserId(USER_ID);
+        fear.setActive(true);
         fear.setType(type);
         fear.setDescription(description);
         fear.setConfidence(new BigDecimal(confidence));
@@ -224,6 +265,7 @@ class MemoryRetrievalServiceTest {
             String note) {
         ProfileRelationship relationship = new ProfileRelationship();
         relationship.setUserId(USER_ID);
+        relationship.setActive(true);
         relationship.setName(name);
         relationship.setRole(role);
         relationship.setInfluenceLevel(influenceLevel);
