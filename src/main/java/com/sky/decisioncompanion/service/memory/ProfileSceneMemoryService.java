@@ -37,13 +37,13 @@ public class ProfileSceneMemoryService {
         this.vectorStore = vectorStore;
     }
 
-    public void saveSceneMemory(SceneMemoryWrite memory) {
+    public SceneMemoryWriteResult saveSceneMemory(SceneMemoryWrite memory) {
         if (memory == null || memory.userId() == null || memory.profileRecordCount() <= 0) {
-            return;
+            return new SceneMemoryWriteResult(List.of());
         }
         if (this.vectorStore == null) {
             logger.warn("向量存储服务暂不可用，跳过存储, userId: {}", memory.userId());
-            return;
+            return new SceneMemoryWriteResult(List.of());
         }
 
         try {
@@ -51,8 +51,23 @@ public class ProfileSceneMemoryService {
                     .map(chunk -> buildDocument(memory, chunk))
                     .toList();
             vectorStore.add(documents);
+            return new SceneMemoryWriteResult(documents.stream().map(Document::getId).toList());
         } catch (Exception e) {
             logger.error("向量存储失败, userId: {}", memory.userId(), e);
+            return new SceneMemoryWriteResult(List.of());
+        }
+    }
+
+    public boolean deleteSceneMemory(String documentId) {
+        if (!StringUtils.hasText(documentId) || this.vectorStore == null) {
+            return false;
+        }
+        try {
+            vectorStore.delete(List.of(documentId));
+            return true;
+        } catch (Exception e) {
+            logger.warn("向量记忆删除失败, documentId: {}", documentId, e);
+            return false;
         }
     }
 
@@ -121,6 +136,9 @@ public class ProfileSceneMemoryService {
         }
         if (memory.sourceConversationId() != null) {
             metadata.put("sourceConversationId", String.valueOf(memory.sourceConversationId()));
+        }
+        if (memory.sourceProfileRecordId() != null) {
+            metadata.put("sourceProfileRecordId", String.valueOf(memory.sourceProfileRecordId()));
         }
         metadata.put("createdAt", LocalDateTime.now().toString());
 
@@ -246,7 +264,8 @@ public class ProfileSceneMemoryService {
             List<String> sceneSignals,
             String memoryType,
             BigDecimal confidence,
-            Long sourceConversationId) {
+            Long sourceConversationId,
+            Long sourceProfileRecordId) {
 
         public SceneMemoryWrite {
             userMessage = userMessage == null ? "" : userMessage.trim();
@@ -255,6 +274,12 @@ public class ProfileSceneMemoryService {
             evidence = cleanList(evidence);
             sceneSignals = cleanList(sceneSignals);
             memoryType = memoryType == null ? "" : memoryType.trim();
+        }
+    }
+
+    public record SceneMemoryWriteResult(List<String> documentIds) {
+        public SceneMemoryWriteResult {
+            documentIds = documentIds == null ? List.of() : documentIds;
         }
     }
 

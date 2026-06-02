@@ -35,7 +35,8 @@ class ProfileSceneMemoryServiceTest {
                 List.of("value:城市偏好:更偏向离家近的城市"),
                 "value",
                 new BigDecimal("0.95"),
-                9L));
+                9L,
+                null));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
@@ -80,6 +81,7 @@ class ProfileSceneMemoryServiceTest {
                         "boundary:工作强度:不接受长期高压"),
                 "mixed",
                 new BigDecimal("0.93"),
+                null,
                 null));
 
         List<Document> documents = captureDocuments();
@@ -130,7 +132,8 @@ class ProfileSceneMemoryServiceTest {
                         " VALUE:Career Choice:remote work "),
                 "value",
                 new BigDecimal("0.95"),
-                9L));
+                9L,
+                null));
 
         assertThat(captureDocuments()).hasSize(1);
     }
@@ -164,6 +167,7 @@ class ProfileSceneMemoryServiceTest {
                 List.of(),
                 "values",
                 new BigDecimal("0.90"),
+                null,
                 null));
 
         List<Document> documents = captureDocuments();
@@ -191,6 +195,7 @@ class ProfileSceneMemoryServiceTest {
                 List.of(),
                 "",
                 null,
+                null,
                 null));
 
         List<Document> documents = captureDocuments();
@@ -217,7 +222,50 @@ class ProfileSceneMemoryServiceTest {
                 List.of("value:自由度:希望保留自主安排时间的空间"),
                 "values",
                 new BigDecimal("0.90"),
+                null,
                 null));
+    }
+
+    @Test
+    void saveSceneMemoryReturnsWrittenDocumentIdsAndSourceProfileRecordId() {
+        ProfileSceneMemoryService service = new ProfileSceneMemoryService(vectorStore);
+
+        ProfileSceneMemoryService.SceneMemoryWriteResult result = service.saveSceneMemory(
+                new ProfileSceneMemoryService.SceneMemoryWrite(
+                        7L,
+                        "我更在意需要时能回家",
+                        "user_confirm",
+                        1,
+                        List.of("value"),
+                        List.of("我更在意需要时能回家"),
+                        List.of("value:城市距离:需要时能回家"),
+                        "value",
+                        new BigDecimal("0.90"),
+                        9L,
+                        101L));
+
+        List<Document> documents = captureDocuments();
+
+        assertThat(result.documentIds()).containsExactly(documents.get(0).getId());
+        assertThat(documents.get(0).getMetadata())
+                .containsEntry("sourceProfileRecordId", "101");
+    }
+
+    @Test
+    void deleteSceneMemoryDeletesDocumentById() {
+        ProfileSceneMemoryService service = new ProfileSceneMemoryService(vectorStore);
+
+        boolean deleted = service.deleteSceneMemory("profile-scene:7:value:abc");
+
+        assertThat(deleted).isTrue();
+        verify(vectorStore).delete(List.of("profile-scene:7:value:abc"));
+    }
+
+    @Test
+    void deleteSceneMemoryReturnsFalseWhenVectorStoreMissing() {
+        ProfileSceneMemoryService service = new ProfileSceneMemoryService(null);
+
+        assertThat(service.deleteSceneMemory("profile-scene:7:value:abc")).isFalse();
     }
 
     private ProfileSceneMemoryService.SceneMemoryWrite sceneMemory(String signal, String memoryType) {
@@ -231,7 +279,8 @@ class ProfileSceneMemoryServiceTest {
                 List.of(signal),
                 memoryType,
                 new BigDecimal("0.95"),
-                9L);
+                9L,
+                null);
     }
 
     private List<Document> captureDocuments() {
