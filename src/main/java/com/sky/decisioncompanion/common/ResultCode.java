@@ -16,6 +16,7 @@ public enum ResultCode {
     USERNAME_UNSUPPORTED_CHARS(40012, "用户名不能包含空白字符、斜杠或反斜杠", HttpStatus.BAD_REQUEST),
     PASSWORD_TOO_SHORT(40013, "密码至少需要 8 位", HttpStatus.BAD_REQUEST),
     PASSWORD_TOO_LONG(40014, "密码不能超过 72 位", HttpStatus.BAD_REQUEST),
+    UNSUPPORTED_PROFILE_TYPE(40030, "不支持的画像类型", HttpStatus.BAD_REQUEST),
 
     UNAUTHORIZED(40100, "请先登录", HttpStatus.UNAUTHORIZED),
     AUTH_FAILED(40101, "用户名或密码错误", HttpStatus.UNAUTHORIZED),
@@ -24,10 +25,14 @@ public enum ResultCode {
     USER_NOT_FOUND(40401, "用户不存在", HttpStatus.NOT_FOUND),
     ONBOARDING_STEP_NOT_FOUND(40410, "步骤不存在", HttpStatus.NOT_FOUND),
     CONVERSATION_NOT_FOUND(40420, "会话不存在", HttpStatus.NOT_FOUND),
+    PROFILE_MEMORY_NOT_FOUND(40430, "待确认记忆不存在", HttpStatus.NOT_FOUND),
+    PROFILE_RECORD_NOT_FOUND(40431, "画像记录不存在", HttpStatus.NOT_FOUND),
 
     USERNAME_EXISTS(40901, "用户名已存在", HttpStatus.CONFLICT),
     ONBOARDING_COMPLETED(40910, "冷启动已完成", HttpStatus.CONFLICT),
     ONBOARDING_STEP_MISMATCH(40911, "请按当前步骤提交", HttpStatus.CONFLICT),
+    PROFILE_MEMORY_ALREADY_HANDLED(40930, "待确认记忆已处理", HttpStatus.CONFLICT),
+    PROFILE_MEMORY_EXPIRED(40931, "待确认记忆已过期", HttpStatus.CONFLICT),
 
     INTERNAL_ERROR(50000, "服务器内部错误", HttpStatus.INTERNAL_SERVER_ERROR);
 

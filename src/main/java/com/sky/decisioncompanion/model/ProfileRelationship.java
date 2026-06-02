@@ -20,6 +20,9 @@ public class ProfileRelationship {
     @Schema(description = "用户ID")
     private Long userId;
 
+    @Schema(description = "是否有效")
+    private Boolean active;
+
     @Schema(description = "关系人姓名")
     private String name;
 

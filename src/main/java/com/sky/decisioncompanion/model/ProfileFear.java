@@ -21,6 +21,9 @@ public class ProfileFear {
     @Schema(description = "用户ID")
     private Long userId;
 
+    @Schema(description = "是否有效")
+    private Boolean active;
+
     @Schema(description = "类型 fear/boundary")
     private String type;
 

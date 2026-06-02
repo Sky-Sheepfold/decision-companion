@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS onboarding_progress (
 CREATE TABLE IF NOT EXISTS profile_values (
     id           BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id      BIGINT NOT NULL COMMENT '用户ID',
+    active       BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否有效',
     item         VARCHAR(100) COMMENT '价值维度',
     preference   VARCHAR(200) COMMENT '倾向描述',
     confidence   DECIMAL(3,2) COMMENT '置信度 0.00~1.00',
@@ -71,6 +72,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_call_log (
 CREATE TABLE IF NOT EXISTS profile_emotion (
     id           BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id      BIGINT NOT NULL COMMENT '用户ID',
+    active       BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否有效',
     trigger_desc VARCHAR(200) COMMENT '触发描述',
     emotion      VARCHAR(100) COMMENT '情绪类型',
     behavior     VARCHAR(500) COMMENT '行为表现',
@@ -83,6 +85,7 @@ CREATE TABLE IF NOT EXISTS profile_emotion (
 CREATE TABLE IF NOT EXISTS profile_relationship (
     id              BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id         BIGINT NOT NULL COMMENT '用户ID',
+    active          BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否有效',
     name            VARCHAR(50) COMMENT '关系人姓名',
     role            VARCHAR(50) COMMENT '关系角色',
     influence_level VARCHAR(10) COMMENT '影响力等级 高/中/低',
@@ -96,6 +99,7 @@ CREATE TABLE IF NOT EXISTS profile_relationship (
 CREATE TABLE IF NOT EXISTS profile_fear (
     id             BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id        BIGINT NOT NULL COMMENT '用户ID',
+    active         BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否有效',
     type           VARCHAR(10) COMMENT '类型 fear/boundary',
     description    VARCHAR(500) COMMENT '描述',
     manifestation  VARCHAR(500) COMMENT '表现形式',
@@ -105,6 +109,60 @@ CREATE TABLE IF NOT EXISTS profile_fear (
     updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='恐惧与边界';
+
+CREATE TABLE IF NOT EXISTS profile_memory_candidate (
+    id                     BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id                BIGINT NOT NULL COMMENT '用户ID',
+    profile_type           VARCHAR(20) NOT NULL COMMENT 'value/emotion/relationship/fear/boundary',
+    subject                VARCHAR(500) NOT NULL COMMENT '画像主体',
+    content                VARCHAR(1000) NOT NULL COMMENT '画像内容',
+    detail                 VARCHAR(500) COMMENT '补充字段',
+    confidence             DECIMAL(3,2) COMMENT '置信度',
+    evidence               JSON COMMENT '证据',
+    source                 VARCHAR(50) NOT NULL COMMENT 'profile_extract/agent_tool_update',
+    source_conversation_id BIGINT COMMENT '来源会话ID',
+    status                 VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/confirmed/rejected/expired',
+    expires_at             DATETIME NOT NULL COMMENT '过期时间',
+    handled_at             DATETIME COMMENT '处理时间',
+    created_at             DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_memory_candidate_user_status_expires_created (user_id, status, expires_at, created_at),
+    INDEX idx_memory_candidate_user_type_status (user_id, profile_type, status),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='待确认画像记忆';
+
+CREATE TABLE IF NOT EXISTS profile_memory_audit_log (
+    id                BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id           BIGINT NOT NULL COMMENT '用户ID',
+    profile_type      VARCHAR(20) NOT NULL COMMENT '画像类型',
+    profile_record_id BIGINT COMMENT '正式画像记录ID',
+    candidate_id      BIGINT COMMENT '候选ID',
+    action            VARCHAR(20) NOT NULL COMMENT 'confirm/reject/correct/delete',
+    before_snapshot   JSON COMMENT '变更前快照',
+    after_snapshot    JSON COMMENT '变更后快照',
+    reason            VARCHAR(500) COMMENT '用户原因或系统备注',
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_memory_audit_user_created (user_id, created_at),
+    INDEX idx_memory_audit_user_type_created (user_id, profile_type, created_at),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='画像记忆治理审计日志';
+
+CREATE TABLE IF NOT EXISTS profile_scene_memory_link (
+    id                BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id           BIGINT NOT NULL COMMENT '用户ID',
+    profile_type      VARCHAR(20) NOT NULL COMMENT '画像类型',
+    profile_record_id BIGINT NOT NULL COMMENT '正式画像记录ID',
+    document_id       VARCHAR(200) NOT NULL COMMENT 'Chroma Document ID',
+    source            VARCHAR(50) NOT NULL COMMENT 'profile_extract/agent_tool_update/user_confirm/user_correction',
+    active            BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否有效',
+    delete_status     VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT 'active/deleted/delete_failed',
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_scene_memory_link_profile (profile_type, profile_record_id, active),
+    INDEX idx_scene_memory_link_user_active (user_id, active),
+    UNIQUE KEY uk_scene_memory_link_document (document_id),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='画像记录与场景记忆向量关联';
 
 -- 聊天会话
 CREATE TABLE IF NOT EXISTS chat_conversation (
