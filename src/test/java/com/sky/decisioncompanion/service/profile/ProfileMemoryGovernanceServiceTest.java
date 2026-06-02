@@ -396,6 +396,14 @@ class ProfileMemoryGovernanceServiceTest {
         assertTransactional("deleteProfile", Long.class, String.class, Long.class, String.class);
     }
 
+    @Test
+    void candidateHandlingMethodsDoNotRollBackExpiredStatusOnBusinessException() throws NoSuchMethodException {
+        assertNoRollbackForBusinessException("confirmCandidate", Long.class, Long.class);
+        assertNoRollbackForBusinessException("rejectCandidate", Long.class, Long.class, String.class);
+        assertNoRollbackForBusinessException("correctCandidate", Long.class, Long.class,
+                ProfileMemoryGovernanceService.MemoryCorrectionCommand.class);
+    }
+
     private ProfileMemoryCandidate pendingValueCandidate() {
         ProfileMemoryCandidate candidate = new ProfileMemoryCandidate();
         candidate.setUserId(USER_ID);
@@ -426,5 +434,13 @@ class ProfileMemoryGovernanceServiceTest {
     private void assertTransactional(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
         Method method = ProfileMemoryGovernanceService.class.getMethod(methodName, parameterTypes);
         assertThat(method.getAnnotation(Transactional.class)).isNotNull();
+    }
+
+    private void assertNoRollbackForBusinessException(String methodName, Class<?>... parameterTypes)
+            throws NoSuchMethodException {
+        Method method = ProfileMemoryGovernanceService.class.getMethod(methodName, parameterTypes);
+        Transactional transactional = method.getAnnotation(Transactional.class);
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.noRollbackFor()).contains(BusinessException.class);
     }
 }

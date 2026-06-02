@@ -148,7 +148,7 @@ public class ProfileMemoryGovernanceService {
         return new GovernanceResult(true, "confirm", profileType, formal.profileRecordId(), null, "画像记忆已写入");
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public GovernanceResult confirmCandidate(Long userId, Long candidateId) {
         ProfileMemoryCandidate candidate = loadPendingCandidate(userId, candidateId);
         String beforeSnapshot = toAuditJson(candidate);
@@ -177,7 +177,7 @@ public class ProfileMemoryGovernanceService {
                 formal.profileRecordId(), candidate.getId(), "待确认记忆已确认并写入");
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public GovernanceResult rejectCandidate(Long userId, Long candidateId, String reason) {
         ProfileMemoryCandidate candidate = loadPendingCandidate(userId, candidateId);
         String beforeSnapshot = toAuditJson(candidate);
@@ -192,7 +192,7 @@ public class ProfileMemoryGovernanceService {
                 candidate.getId(), "待确认记忆已拒绝");
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public GovernanceResult correctCandidate(Long userId, Long candidateId, MemoryCorrectionCommand command) {
         ProfileMemoryCandidate candidate = loadPendingCandidate(userId, candidateId);
         String beforeSnapshot = toAuditJson(candidate);
