@@ -22,6 +22,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Method;
@@ -112,6 +113,41 @@ class ProfileMemoryGovernanceServiceTest {
         assertThat(candidate.getStatus()).isEqualTo("pending");
         assertThat(candidate.getEvidence()).contains("我想慢慢成长", "不太想被推着跑");
         assertThat(candidate.getExpiresAt()).isBetween(before.plusDays(7), after.plusDays(7));
+    }
+
+    @Test
+    void createCandidateReusesEquivalentPendingCandidate() {
+        ProfileMemoryCandidate existing = pendingValueCandidate();
+        existing.setId(12L);
+        existing.setSubject(" 职业 节奏 ");
+        existing.setContent(" 更偏好可预期的成长路径 ");
+        existing.setDetail(" 长期规划 ");
+        existing.setConfidence(new BigDecimal("0.72"));
+        existing.setEvidence("[\"旧证据\",\" 重复证据 \"]");
+        when(candidateRepository.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(existing));
+
+        ProfileMemoryCandidate candidate = service.createCandidate(
+                new ProfileMemoryGovernanceService.MemoryCandidateCommand(
+                        USER_ID,
+                        "values",
+                        "职业节奏",
+                        "更偏好可预期的成长路径",
+                        "长期规划",
+                        new BigDecimal("0.85"),
+                        List.of("重复证据", " 新证据 "),
+                        "agent_tool_update",
+                        100L));
+
+        assertThat(candidate).isSameAs(existing);
+        assertThat(candidate.getConfidence()).isEqualByComparingTo("0.85");
+        assertThat(candidate.getEvidence()).isEqualTo("[\"旧证据\",\"重复证据\",\"新证据\"]");
+        assertThat(candidate.getSource()).isEqualTo("agent_tool_update");
+        assertThat(candidate.getSourceConversationId()).isEqualTo(100L);
+        assertThat(candidate.getStatus()).isEqualTo("pending");
+        assertThat(candidate.getExpiresAt()).isNotNull();
+        assertThat(candidate.getUpdatedAt()).isNotNull();
+        verify(candidateRepository).updateById(existing);
+        verify(candidateRepository, never()).insert(any(ProfileMemoryCandidate.class));
     }
 
     @Test
@@ -291,6 +327,84 @@ class ProfileMemoryGovernanceServiceTest {
         assertThat(existingLink.getActive()).isTrue();
         assertThat(existingLink.getDeleteStatus()).isEqualTo("active");
         assertThat(existingLink.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void writeConfirmedMemoryUpdatesExistingActiveValueInsteadOfInsertingDuplicate() {
+        ProfileValues existingValue = new ProfileValues();
+        existingValue.setId(224L);
+        existingValue.setUserId(USER_ID);
+        existingValue.setActive(true);
+        existingValue.setItem(" 生活 节奏 ");
+        existingValue.setPreference("旧描述");
+        existingValue.setConfidence(new BigDecimal("0.60"));
+        existingValue.setEvidence("[\"旧证据\"]");
+        when(valuesRepository.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(existingValue));
+        when(sceneMemoryService.saveSceneMemory(any(ProfileSceneMemoryService.SceneMemoryWrite.class)))
+                .thenReturn(new ProfileSceneMemoryService.SceneMemoryWriteResult(List.of()));
+
+        ProfileMemoryGovernanceService.GovernanceResult result = service.writeConfirmedMemory(
+                new ProfileMemoryGovernanceService.ConfirmedMemoryCommand(
+                        USER_ID,
+                        "value",
+                        "生活节奏",
+                        "希望保留自主安排时间",
+                        "软边界",
+                        new BigDecimal("0.91"),
+                        List.of("我不想每天被排满"),
+                        "agent_tool_update",
+                        88L,
+                        "我不想每天被排满"));
+
+        assertThat(result.profileRecordId()).isEqualTo(224L);
+        verify(valuesRepository).updateById(existingValue);
+        verify(valuesRepository, never()).insert(any(ProfileValues.class));
+        assertThat(existingValue.getItem()).isEqualTo("生活节奏");
+        assertThat(existingValue.getPreference()).isEqualTo("希望保留自主安排时间");
+        assertThat(existingValue.getConfidence()).isEqualByComparingTo("0.91");
+        assertThat(existingValue.getEvidence()).contains("我不想每天被排满");
+        assertThat(existingValue.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void writeConfirmedMemoryRetriesLinkUpdateWhenDuplicateDocumentIdInsertedConcurrently() {
+        doAnswer(invocation -> {
+            ProfileValues profile = invocation.getArgument(0);
+            profile.setId(225L);
+            return 1;
+        }).when(valuesRepository).insert(any(ProfileValues.class));
+        when(sceneMemoryService.saveSceneMemory(any(ProfileSceneMemoryService.SceneMemoryWrite.class)))
+                .thenReturn(new ProfileSceneMemoryService.SceneMemoryWriteResult(List.of("doc-concurrent")));
+        ProfileSceneMemoryLink concurrentLink = new ProfileSceneMemoryLink();
+        concurrentLink.setId(78L);
+        concurrentLink.setDocumentId("doc-concurrent");
+        when(linkRepository.selectOne(any(LambdaQueryWrapper.class))).thenReturn(null, concurrentLink);
+        when(linkRepository.insert(any(ProfileSceneMemoryLink.class)))
+                .thenThrow(new DuplicateKeyException("duplicate document id"));
+
+        ProfileMemoryGovernanceService.GovernanceResult result = service.writeConfirmedMemory(
+                new ProfileMemoryGovernanceService.ConfirmedMemoryCommand(
+                        USER_ID,
+                        "value",
+                        "生活节奏",
+                        "希望保留自主安排时间",
+                        "软边界",
+                        new BigDecimal("0.91"),
+                        List.of("我不想每天被排满"),
+                        "agent_tool_update",
+                        88L,
+                        "我不想每天被排满"));
+
+        assertThat(result.profileRecordId()).isEqualTo(225L);
+        verify(linkRepository).insert(any(ProfileSceneMemoryLink.class));
+        verify(linkRepository).updateById(concurrentLink);
+        assertThat(concurrentLink.getUserId()).isEqualTo(USER_ID);
+        assertThat(concurrentLink.getProfileType()).isEqualTo("value");
+        assertThat(concurrentLink.getProfileRecordId()).isEqualTo(225L);
+        assertThat(concurrentLink.getSource()).isEqualTo("agent_tool_update");
+        assertThat(concurrentLink.getActive()).isTrue();
+        assertThat(concurrentLink.getDeleteStatus()).isEqualTo("active");
+        assertThat(concurrentLink.getUpdatedAt()).isNotNull();
     }
 
     @Test

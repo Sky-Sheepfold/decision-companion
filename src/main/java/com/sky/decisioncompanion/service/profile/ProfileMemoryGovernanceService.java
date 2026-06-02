@@ -20,6 +20,7 @@ import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileSceneMemoryLinkRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -28,6 +29,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
+import java.util.stream.Stream;
 
 @Service
 public class ProfileMemoryGovernanceService {
@@ -78,13 +81,38 @@ public class ProfileMemoryGovernanceService {
         validateRequired(command.subject(), command.content());
 
         LocalDateTime now = LocalDateTime.now();
+        String subject = clean(command.subject());
+        String content = clean(command.content());
+        String detail = clean(command.detail());
+        BigDecimal confidence = ProfileWritePolicy.normalizeConfidence(command.confidence());
+        ProfileMemoryCandidate existing = findEquivalentPendingCandidate(
+                command.userId(), profileType, subject, content, detail, now);
+        if (existing != null) {
+            existing.setProfileType(profileType);
+            existing.setSubject(subject);
+            existing.setContent(content);
+            existing.setDetail(detail);
+            existing.setConfidence(max(existing.getConfidence(), confidence));
+            existing.setEvidence(toJson(mergeEvidence(parseEvidence(existing.getEvidence()), command.evidence())));
+            if (StringUtils.hasText(command.source())) {
+                existing.setSource(command.source().trim());
+            }
+            if (command.sourceConversationId() != null) {
+                existing.setSourceConversationId(command.sourceConversationId());
+            }
+            existing.setStatus(STATUS_PENDING);
+            existing.setUpdatedAt(now);
+            candidateRepository.updateById(existing);
+            return existing;
+        }
+
         ProfileMemoryCandidate candidate = new ProfileMemoryCandidate();
         candidate.setUserId(command.userId());
         candidate.setProfileType(profileType);
-        candidate.setSubject(command.subject().trim());
-        candidate.setContent(command.content().trim());
-        candidate.setDetail(clean(command.detail()));
-        candidate.setConfidence(ProfileWritePolicy.normalizeConfidence(command.confidence()));
+        candidate.setSubject(subject);
+        candidate.setContent(content);
+        candidate.setDetail(detail);
+        candidate.setConfidence(confidence);
         candidate.setEvidence(toJson(command.evidence()));
         candidate.setSource(clean(command.source()));
         candidate.setSourceConversationId(command.sourceConversationId());
@@ -274,57 +302,89 @@ public class ProfileMemoryGovernanceService {
 
         switch (command.profileType()) {
             case "value" -> {
-                ProfileValues value = new ProfileValues();
+                ProfileValues value = findValue(command.userId(), command.subject());
+                boolean insert = value == null;
+                if (insert) {
+                    value = new ProfileValues();
+                }
                 value.setUserId(command.userId());
                 value.setActive(true);
-                value.setItem(command.subject().trim());
-                value.setPreference(command.content().trim());
+                value.setItem(clean(command.subject()));
+                value.setPreference(clean(command.content()));
                 value.setConfidence(ProfileWritePolicy.normalizeConfidence(command.confidence()));
                 value.setEvidence(evidenceJson);
                 value.setUpdatedAt(now);
-                valuesRepository.insert(value);
+                if (insert) {
+                    valuesRepository.insert(value);
+                } else {
+                    valuesRepository.updateById(value);
+                }
                 profile = value;
                 profileRecordId = value.getId();
             }
             case "emotion" -> {
-                ProfileEmotion emotion = new ProfileEmotion();
-                emotion.setUserId(command.userId());
+                ProfileEmotion emotion = findEmotion(command.userId(), command.subject(), command.detail());
+                boolean insert = emotion == null;
+                if (insert) {
+                    emotion = new ProfileEmotion();
+                    emotion.setUserId(command.userId());
+                }
                 emotion.setActive(true);
-                emotion.setEmotion(command.subject().trim());
-                emotion.setBehavior(command.content().trim());
+                emotion.setEmotion(clean(command.subject()));
+                emotion.setBehavior(clean(command.content()));
                 emotion.setTriggerDesc(clean(command.detail()));
                 emotion.setAgentNote(String.join("\n", cleanList(command.evidence())));
                 emotion.setUpdatedAt(now);
-                emotionRepository.insert(emotion);
+                if (insert) {
+                    emotionRepository.insert(emotion);
+                } else {
+                    emotionRepository.updateById(emotion);
+                }
                 profile = emotion;
                 profileRecordId = emotion.getId();
             }
             case "relationship" -> {
-                ProfileRelationship relationship = new ProfileRelationship();
-                relationship.setUserId(command.userId());
+                ProfileRelationship relationship = findRelationship(command.userId(), command.subject());
+                boolean insert = relationship == null;
+                if (insert) {
+                    relationship = new ProfileRelationship();
+                    relationship.setUserId(command.userId());
+                }
                 relationship.setActive(true);
-                relationship.setName(command.subject().trim());
-                relationship.setNote(command.content().trim());
+                relationship.setName(clean(command.subject()));
+                relationship.setNote(clean(command.content()));
                 relationship.setRole(clean(command.detail()));
                 relationship.setUpdatedAt(now);
-                relationshipRepository.insert(relationship);
+                if (insert) {
+                    relationshipRepository.insert(relationship);
+                } else {
+                    relationshipRepository.updateById(relationship);
+                }
                 profile = relationship;
                 profileRecordId = relationship.getId();
             }
             case "fear", "boundary" -> {
-                ProfileFear fear = new ProfileFear();
-                fear.setUserId(command.userId());
+                ProfileFear fear = findFear(command.userId(), command.profileType(), command.subject());
+                boolean insert = fear == null;
+                if (insert) {
+                    fear = new ProfileFear();
+                    fear.setUserId(command.userId());
+                }
                 fear.setActive(true);
                 fear.setType(command.profileType());
-                fear.setDescription(command.subject().trim());
-                fear.setManifestation(command.content().trim());
+                fear.setDescription(clean(command.subject()));
+                fear.setManifestation(clean(command.content()));
                 fear.setConfidence(ProfileWritePolicy.normalizeConfidence(command.confidence()));
                 fear.setEvidence(evidenceJson);
                 if ("boundary".equals(command.profileType())) {
                     fear.setBoundaryType(clean(command.detail()));
                 }
                 fear.setUpdatedAt(now);
-                fearRepository.insert(fear);
+                if (insert) {
+                    fearRepository.insert(fear);
+                } else {
+                    fearRepository.updateById(fear);
+                }
                 profile = fear;
                 profileRecordId = fear.getId();
             }
@@ -350,9 +410,7 @@ public class ProfileMemoryGovernanceService {
                         command.sourceConversationId(),
                         profileRecordId));
         for (String documentId : result.documentIds()) {
-            ProfileSceneMemoryLink existingLink = linkRepository.selectOne(
-                    new LambdaQueryWrapper<ProfileSceneMemoryLink>()
-                            .eq(ProfileSceneMemoryLink::getDocumentId, documentId));
+            ProfileSceneMemoryLink existingLink = findLink(documentId);
             if (existingLink == null) {
                 ProfileSceneMemoryLink link = new ProfileSceneMemoryLink();
                 link.setUserId(command.userId());
@@ -362,18 +420,110 @@ public class ProfileMemoryGovernanceService {
                 link.setSource(defaultIfBlank(command.source(), "profile_governance"));
                 link.setActive(true);
                 link.setDeleteStatus(LINK_ACTIVE);
-                linkRepository.insert(link);
+                try {
+                    linkRepository.insert(link);
+                } catch (DuplicateKeyException e) {
+                    ProfileSceneMemoryLink concurrentLink = findLink(documentId);
+                    if (concurrentLink == null) {
+                        throw e;
+                    }
+                    updateLink(concurrentLink, command, profileRecordId);
+                }
                 continue;
             }
-            existingLink.setUserId(command.userId());
-            existingLink.setProfileType(command.profileType());
-            existingLink.setProfileRecordId(profileRecordId);
-            existingLink.setSource(defaultIfBlank(command.source(), "profile_governance"));
-            existingLink.setActive(true);
-            existingLink.setDeleteStatus(LINK_ACTIVE);
-            existingLink.setUpdatedAt(LocalDateTime.now());
-            linkRepository.updateById(existingLink);
+            updateLink(existingLink, command, profileRecordId);
         }
+    }
+
+    private ProfileSceneMemoryLink findLink(String documentId) {
+        return linkRepository.selectOne(new LambdaQueryWrapper<ProfileSceneMemoryLink>()
+                .eq(ProfileSceneMemoryLink::getDocumentId, documentId));
+    }
+
+    private void updateLink(ProfileSceneMemoryLink link, FormalWriteCommand command, Long profileRecordId) {
+        link.setUserId(command.userId());
+        link.setProfileType(command.profileType());
+        link.setProfileRecordId(profileRecordId);
+        link.setSource(defaultIfBlank(command.source(), "profile_governance"));
+        link.setActive(true);
+        link.setDeleteStatus(LINK_ACTIVE);
+        link.setUpdatedAt(LocalDateTime.now());
+        linkRepository.updateById(link);
+    }
+
+    private ProfileMemoryCandidate findEquivalentPendingCandidate(
+            Long userId,
+            String profileType,
+            String subject,
+            String content,
+            String detail,
+            LocalDateTime now) {
+        return safeRepositoryList(candidateRepository.selectList(new LambdaQueryWrapper<ProfileMemoryCandidate>()
+                        .eq(ProfileMemoryCandidate::getUserId, userId)
+                        .eq(ProfileMemoryCandidate::getProfileType, profileType)
+                        .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING)
+                        .gt(ProfileMemoryCandidate::getExpiresAt, now)))
+                .stream()
+                .filter(candidate -> Objects.equals(userId, candidate.getUserId()))
+                .filter(candidate -> STATUS_PENDING.equals(candidate.getStatus()))
+                .filter(candidate -> candidate.getExpiresAt() != null && candidate.getExpiresAt().isAfter(now))
+                .filter(candidate -> normalizeKey(candidate.getProfileType()).equals(normalizeKey(profileType)))
+                .filter(candidate -> normalizeKey(candidate.getSubject()).equals(normalizeKey(subject)))
+                .filter(candidate -> normalizeKey(candidate.getContent()).equals(normalizeKey(content)))
+                .filter(candidate -> normalizeKey(candidate.getDetail()).equals(normalizeKey(detail)))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private ProfileValues findValue(Long userId, String item) {
+        return safeRepositoryList(valuesRepository.selectList(new LambdaQueryWrapper<ProfileValues>()
+                        .eq(ProfileValues::getUserId, userId)
+                        .eq(ProfileValues::getActive, true)))
+                .stream()
+                .filter(value -> Objects.equals(userId, value.getUserId()))
+                .filter(value -> Boolean.TRUE.equals(value.getActive()))
+                .filter(value -> normalizeKey(value.getItem()).equals(normalizeKey(item)))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private ProfileEmotion findEmotion(Long userId, String emotion, String triggerDesc) {
+        return safeRepositoryList(emotionRepository.selectList(new LambdaQueryWrapper<ProfileEmotion>()
+                        .eq(ProfileEmotion::getUserId, userId)
+                        .eq(ProfileEmotion::getActive, true)))
+                .stream()
+                .filter(value -> Objects.equals(userId, value.getUserId()))
+                .filter(value -> Boolean.TRUE.equals(value.getActive()))
+                .filter(value -> normalizeKey(value.getEmotion()).equals(normalizeKey(emotion)))
+                .filter(value -> normalizeKey(value.getTriggerDesc()).equals(normalizeKey(triggerDesc)))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private ProfileRelationship findRelationship(Long userId, String name) {
+        return safeRepositoryList(relationshipRepository.selectList(new LambdaQueryWrapper<ProfileRelationship>()
+                        .eq(ProfileRelationship::getUserId, userId)
+                        .eq(ProfileRelationship::getActive, true)))
+                .stream()
+                .filter(value -> Objects.equals(userId, value.getUserId()))
+                .filter(value -> Boolean.TRUE.equals(value.getActive()))
+                .filter(value -> normalizeKey(value.getName()).equals(normalizeKey(name)))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private ProfileFear findFear(Long userId, String type, String description) {
+        return safeRepositoryList(fearRepository.selectList(new LambdaQueryWrapper<ProfileFear>()
+                        .eq(ProfileFear::getUserId, userId)
+                        .eq(ProfileFear::getActive, true)
+                        .eq(ProfileFear::getType, type)))
+                .stream()
+                .filter(value -> Objects.equals(userId, value.getUserId()))
+                .filter(value -> Boolean.TRUE.equals(value.getActive()))
+                .filter(value -> normalizeKey(value.getType()).equals(normalizeKey(type)))
+                .filter(value -> normalizeKey(value.getDescription()).equals(normalizeKey(description)))
+                .findFirst()
+                .orElse(null);
     }
 
     private ProfileMemoryCandidate loadPendingCandidate(Long userId, Long candidateId) {
@@ -579,6 +729,30 @@ public class ProfileMemoryGovernanceService {
                 .filter(StringUtils::hasText)
                 .map(String::trim)
                 .toList();
+    }
+
+    private List<String> mergeEvidence(List<String> existing, List<String> incoming) {
+        return Stream.concat(cleanList(existing).stream(), cleanList(incoming).stream())
+                .distinct()
+                .toList();
+    }
+
+    private BigDecimal max(BigDecimal first, BigDecimal second) {
+        if (first == null) {
+            return second;
+        }
+        if (second == null) {
+            return first;
+        }
+        return first.compareTo(second) >= 0 ? first : second;
+    }
+
+    private String normalizeKey(String value) {
+        return clean(value).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+    }
+
+    private <T> List<T> safeRepositoryList(List<T> values) {
+        return values == null ? List.of() : values;
     }
 
     private String sceneSignal(String profileType, String subject, String content) {
