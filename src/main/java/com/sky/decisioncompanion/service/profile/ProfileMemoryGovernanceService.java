@@ -21,6 +21,7 @@ import com.sky.decisioncompanion.repository.ProfileSceneMemoryLinkRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -34,7 +35,6 @@ public class ProfileMemoryGovernanceService {
     private static final String STATUS_PENDING = "pending";
     private static final String STATUS_CONFIRMED = "confirmed";
     private static final String STATUS_REJECTED = "rejected";
-    private static final String STATUS_CORRECTED = "corrected";
     private static final String STATUS_EXPIRED = "expired";
     private static final String LINK_ACTIVE = "active";
     private static final String LINK_DELETED = "deleted";
@@ -71,6 +71,7 @@ public class ProfileMemoryGovernanceService {
         this.objectMapper = objectMapper.copy().findAndRegisterModules();
     }
 
+    @Transactional
     public ProfileMemoryCandidate createCandidate(MemoryCandidateCommand command) {
         validateUser(command == null ? null : command.userId());
         String profileType = normalizeProfileType(command.profileType());
@@ -97,17 +98,21 @@ public class ProfileMemoryGovernanceService {
 
     public List<ProfileMemoryCandidate> listPendingCandidates(Long userId) {
         validateUser(userId);
+        LocalDateTime now = LocalDateTime.now();
         return candidateRepository.selectList(new LambdaQueryWrapper<ProfileMemoryCandidate>()
                 .eq(ProfileMemoryCandidate::getUserId, userId)
                 .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING)
+                .gt(ProfileMemoryCandidate::getExpiresAt, now)
                 .orderByDesc(ProfileMemoryCandidate::getCreatedAt));
     }
 
     public int countPendingCandidates(Long userId) {
         validateUser(userId);
+        LocalDateTime now = LocalDateTime.now();
         Long count = candidateRepository.selectCount(new LambdaQueryWrapper<ProfileMemoryCandidate>()
                 .eq(ProfileMemoryCandidate::getUserId, userId)
-                .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING));
+                .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING)
+                .gt(ProfileMemoryCandidate::getExpiresAt, now));
         return Math.toIntExact(count == null ? 0L : count);
     }
 
@@ -120,6 +125,7 @@ public class ProfileMemoryGovernanceService {
                 .last("LIMIT " + boundedLimit));
     }
 
+    @Transactional
     public GovernanceResult writeConfirmedMemory(ConfirmedMemoryCommand command) {
         validateUser(command == null ? null : command.userId());
         String profileType = normalizeProfileType(command.profileType());
@@ -142,6 +148,7 @@ public class ProfileMemoryGovernanceService {
         return new GovernanceResult(true, "confirm", profileType, formal.profileRecordId(), null, "画像记忆已写入");
     }
 
+    @Transactional
     public GovernanceResult confirmCandidate(Long userId, Long candidateId) {
         ProfileMemoryCandidate candidate = loadPendingCandidate(userId, candidateId);
         String beforeSnapshot = toAuditJson(candidate);
@@ -170,6 +177,7 @@ public class ProfileMemoryGovernanceService {
                 formal.profileRecordId(), candidate.getId(), "待确认记忆已确认并写入");
     }
 
+    @Transactional
     public GovernanceResult rejectCandidate(Long userId, Long candidateId, String reason) {
         ProfileMemoryCandidate candidate = loadPendingCandidate(userId, candidateId);
         String beforeSnapshot = toAuditJson(candidate);
@@ -184,6 +192,7 @@ public class ProfileMemoryGovernanceService {
                 candidate.getId(), "待确认记忆已拒绝");
     }
 
+    @Transactional
     public GovernanceResult correctCandidate(Long userId, Long candidateId, MemoryCorrectionCommand command) {
         ProfileMemoryCandidate candidate = loadPendingCandidate(userId, candidateId);
         String beforeSnapshot = toAuditJson(candidate);
@@ -202,7 +211,7 @@ public class ProfileMemoryGovernanceService {
                 command.content()));
 
         LocalDateTime now = LocalDateTime.now();
-        candidate.setStatus(STATUS_CORRECTED);
+        candidate.setStatus(STATUS_CONFIRMED);
         candidate.setHandledAt(now);
         candidate.setUpdatedAt(now);
         candidateRepository.updateById(candidate);
@@ -212,6 +221,7 @@ public class ProfileMemoryGovernanceService {
                 formal.profileRecordId(), candidate.getId(), "待确认记忆已修正并写入");
     }
 
+    @Transactional
     public GovernanceResult correctProfile(
             Long userId,
             String profileType,
@@ -220,6 +230,8 @@ public class ProfileMemoryGovernanceService {
         validateUser(userId);
         String normalizedType = normalizeProfileType(profileType);
         validateRequired(command == null ? null : command.subject(), command == null ? null : command.content());
+        String reason = command.reason() == null ? "" : command.reason().trim();
+        List<String> evidence = StringUtils.hasText(reason) ? List.of(reason) : List.of();
 
         Object before = loadOwnedProfile(userId, normalizedType, profileRecordId);
         String beforeSnapshot = toAuditJson(before);
@@ -232,16 +244,17 @@ public class ProfileMemoryGovernanceService {
                 command.content(),
                 command.detail(),
                 BigDecimal.ONE,
-                List.of(command.reason()),
+                evidence,
                 "profile_governance",
                 null,
                 command.content()));
         writeAudit(userId, normalizedType, formal.profileRecordId(), null, "correct",
-                beforeSnapshot, toAuditJson(formal.profile()), command.reason());
+                beforeSnapshot, toAuditJson(formal.profile()), reason);
         return new GovernanceResult(true, "correct", normalizedType,
                 formal.profileRecordId(), null, "画像记录已修正");
     }
 
+    @Transactional
     public GovernanceResult deleteProfile(Long userId, String profileType, Long profileRecordId, String reason) {
         validateUser(userId);
         String normalizedType = normalizeProfileType(profileType);

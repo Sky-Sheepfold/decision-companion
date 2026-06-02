@@ -22,7 +22,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -285,6 +287,115 @@ class ProfileMemoryGovernanceServiceTest {
         assertThat(auditCaptor.getValue().getBeforeSnapshot()).contains("生活节奏");
     }
 
+    @Test
+    void correctProfileAllowsNullReasonWithoutLosingReplacement() {
+        ProfileValues oldValue = new ProfileValues();
+        oldValue.setId(401L);
+        oldValue.setUserId(USER_ID);
+        oldValue.setActive(true);
+        oldValue.setItem("旧节奏");
+        oldValue.setPreference("旧描述");
+        when(valuesRepository.selectById(401L)).thenReturn(oldValue);
+        when(linkRepository.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        doAnswer(invocation -> {
+            ProfileValues profile = invocation.getArgument(0);
+            profile.setId(402L);
+            return 1;
+        }).when(valuesRepository).insert(any(ProfileValues.class));
+        when(sceneMemoryService.saveSceneMemory(any(ProfileSceneMemoryService.SceneMemoryWrite.class)))
+                .thenReturn(new ProfileSceneMemoryService.SceneMemoryWriteResult(List.of()));
+
+        ProfileMemoryGovernanceService.GovernanceResult result = service.correctProfile(
+                USER_ID,
+                "value",
+                401L,
+                new ProfileMemoryGovernanceService.MemoryCorrectionCommand(
+                        "新节奏",
+                        "希望保留自主安排时间",
+                        "软边界",
+                        null));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.action()).isEqualTo("correct");
+        assertThat(result.profileRecordId()).isEqualTo(402L);
+        assertThat(oldValue.getActive()).isFalse();
+
+        ArgumentCaptor<ProfileValues> valueCaptor = ArgumentCaptor.forClass(ProfileValues.class);
+        verify(valuesRepository).insert(valueCaptor.capture());
+        assertThat(valueCaptor.getValue().getItem()).isEqualTo("新节奏");
+
+        ArgumentCaptor<ProfileSceneMemoryService.SceneMemoryWrite> sceneCaptor =
+                ArgumentCaptor.forClass(ProfileSceneMemoryService.SceneMemoryWrite.class);
+        verify(sceneMemoryService).saveSceneMemory(sceneCaptor.capture());
+        assertThat(sceneCaptor.getValue().evidence()).isEmpty();
+    }
+
+    @Test
+    void correctCandidateMarksCandidateConfirmedAndAuditsCorrect() {
+        ProfileMemoryCandidate candidate = pendingValueCandidate();
+        candidate.setId(501L);
+        when(candidateRepository.selectById(501L)).thenReturn(candidate);
+        doAnswer(invocation -> {
+            ProfileValues profile = invocation.getArgument(0);
+            profile.setId(502L);
+            return 1;
+        }).when(valuesRepository).insert(any(ProfileValues.class));
+        when(sceneMemoryService.saveSceneMemory(any(ProfileSceneMemoryService.SceneMemoryWrite.class)))
+                .thenReturn(new ProfileSceneMemoryService.SceneMemoryWriteResult(List.of()));
+
+        ProfileMemoryGovernanceService.GovernanceResult result = service.correctCandidate(
+                USER_ID,
+                501L,
+                new ProfileMemoryGovernanceService.MemoryCorrectionCommand(
+                        "修正节奏",
+                        "更偏好可预期但不排斥挑战",
+                        "长期规划",
+                        "用户补充语义"));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.action()).isEqualTo("correct");
+        assertThat(result.profileRecordId()).isEqualTo(502L);
+
+        ArgumentCaptor<ProfileMemoryCandidate> candidateCaptor = ArgumentCaptor.forClass(ProfileMemoryCandidate.class);
+        verify(candidateRepository).updateById(candidateCaptor.capture());
+        assertThat(candidateCaptor.getValue().getStatus()).isEqualTo("confirmed");
+
+        ArgumentCaptor<ProfileMemoryAuditLog> auditCaptor = ArgumentCaptor.forClass(ProfileMemoryAuditLog.class);
+        verify(auditLogRepository).insert(auditCaptor.capture());
+        assertThat(auditCaptor.getValue().getAction()).isEqualTo("correct");
+        assertThat(auditCaptor.getValue().getReason()).isEqualTo("用户补充语义");
+    }
+
+    @Test
+    void listAndCountPendingCandidatesIgnoreExpiredRows() {
+        when(candidateRepository.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+        when(candidateRepository.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
+
+        service.listPendingCandidates(USER_ID);
+        service.countPendingCandidates(USER_ID);
+
+        ArgumentCaptor<LambdaQueryWrapper<ProfileMemoryCandidate>> wrapperCaptor =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(candidateRepository).selectList(wrapperCaptor.capture());
+        verify(candidateRepository).selectCount(wrapperCaptor.capture());
+
+        assertThat(wrapperCaptor.getAllValues())
+                .allSatisfy(wrapper -> assertThat(wrapper.getExpression().getNormal().size()).isGreaterThan(7));
+    }
+
+    @Test
+    void stateChangingMethodsAreTransactional() throws NoSuchMethodException {
+        assertTransactional("createCandidate", ProfileMemoryGovernanceService.MemoryCandidateCommand.class);
+        assertTransactional("writeConfirmedMemory", ProfileMemoryGovernanceService.ConfirmedMemoryCommand.class);
+        assertTransactional("confirmCandidate", Long.class, Long.class);
+        assertTransactional("rejectCandidate", Long.class, Long.class, String.class);
+        assertTransactional("correctCandidate", Long.class, Long.class,
+                ProfileMemoryGovernanceService.MemoryCorrectionCommand.class);
+        assertTransactional("correctProfile", Long.class, String.class, Long.class,
+                ProfileMemoryGovernanceService.MemoryCorrectionCommand.class);
+        assertTransactional("deleteProfile", Long.class, String.class, Long.class, String.class);
+    }
+
     private ProfileMemoryCandidate pendingValueCandidate() {
         ProfileMemoryCandidate candidate = new ProfileMemoryCandidate();
         candidate.setUserId(USER_ID);
@@ -310,5 +421,10 @@ class ProfileMemoryGovernanceServiceTest {
         link.setActive(true);
         link.setDeleteStatus("active");
         return link;
+    }
+
+    private void assertTransactional(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
+        Method method = ProfileMemoryGovernanceService.class.getMethod(methodName, parameterTypes);
+        assertThat(method.getAnnotation(Transactional.class)).isNotNull();
     }
 }
