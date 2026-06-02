@@ -1,5 +1,6 @@
 package com.sky.decisioncompanion.service.profile;
 
+import com.baomidou.mybatisplus.core.conditions.SharedString;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sky.decisioncompanion.common.BusinessException;
@@ -23,6 +24,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.Method;
@@ -154,7 +156,7 @@ class ProfileMemoryGovernanceServiceTest {
     void confirmCandidateWritesFormalProfileSceneLinkAndAudit() {
         ProfileMemoryCandidate candidate = pendingValueCandidate();
         candidate.setId(31L);
-        when(candidateRepository.selectById(31L)).thenReturn(candidate);
+        when(candidateRepository.selectOne(any(LambdaQueryWrapper.class))).thenReturn(candidate);
         doAnswer(invocation -> {
             ProfileValues profile = invocation.getArgument(0);
             profile.setId(101L);
@@ -195,13 +197,18 @@ class ProfileMemoryGovernanceServiceTest {
         assertThat(auditCaptor.getValue().getAction()).isEqualTo("confirm");
         assertThat(auditCaptor.getValue().getCandidateId()).isEqualTo(31L);
         assertThat(auditCaptor.getValue().getProfileRecordId()).isEqualTo(101L);
+
+        ArgumentCaptor<LambdaQueryWrapper<ProfileMemoryCandidate>> candidateQueryCaptor =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(candidateRepository).selectOne(candidateQueryCaptor.capture());
+        assertThat(lastSql(candidateQueryCaptor.getValue()).trim()).isEqualTo("FOR UPDATE");
     }
 
     @Test
     void rejectCandidateDoesNotWriteFormalProfileOrSceneMemory() {
         ProfileMemoryCandidate candidate = pendingValueCandidate();
         candidate.setId(41L);
-        when(candidateRepository.selectById(41L)).thenReturn(candidate);
+        when(candidateRepository.selectOne(any(LambdaQueryWrapper.class))).thenReturn(candidate);
 
         ProfileMemoryGovernanceService.GovernanceResult result =
                 service.rejectCandidate(USER_ID, 41L, "用户否认这个偏好");
@@ -229,7 +236,7 @@ class ProfileMemoryGovernanceServiceTest {
         ProfileMemoryCandidate candidate = pendingValueCandidate();
         candidate.setId(51L);
         candidate.setExpiresAt(LocalDateTime.now().minusMinutes(1));
-        when(candidateRepository.selectById(51L)).thenReturn(candidate);
+        when(candidateRepository.selectOne(any(LambdaQueryWrapper.class))).thenReturn(candidate);
 
         assertThatThrownBy(() -> service.confirmCandidate(USER_ID, 51L))
                 .isInstanceOf(BusinessException.class)
@@ -494,7 +501,7 @@ class ProfileMemoryGovernanceServiceTest {
     void correctCandidateMarksCandidateConfirmedAndAuditsCorrect() {
         ProfileMemoryCandidate candidate = pendingValueCandidate();
         candidate.setId(501L);
-        when(candidateRepository.selectById(501L)).thenReturn(candidate);
+        when(candidateRepository.selectOne(any(LambdaQueryWrapper.class))).thenReturn(candidate);
         doAnswer(invocation -> {
             ProfileValues profile = invocation.getArgument(0);
             profile.setId(502L);
@@ -602,5 +609,10 @@ class ProfileMemoryGovernanceServiceTest {
         Transactional transactional = method.getAnnotation(Transactional.class);
         assertThat(transactional).isNotNull();
         assertThat(transactional.noRollbackFor()).contains(BusinessException.class);
+    }
+
+    private String lastSql(LambdaQueryWrapper<?> wrapper) {
+        SharedString lastSql = (SharedString) ReflectionTestUtils.getField(wrapper, "lastSql");
+        return lastSql == null ? "" : lastSql.getStringValue();
     }
 }

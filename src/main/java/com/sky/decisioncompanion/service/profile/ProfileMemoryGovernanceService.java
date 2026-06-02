@@ -531,7 +531,9 @@ public class ProfileMemoryGovernanceService {
         if (candidateId == null) {
             throw new BusinessException(ResultCode.BAD_REQUEST);
         }
-        ProfileMemoryCandidate candidate = candidateRepository.selectById(candidateId);
+        ProfileMemoryCandidate candidate = candidateRepository.selectOne(new LambdaQueryWrapper<ProfileMemoryCandidate>()
+                .eq(ProfileMemoryCandidate::getId, candidateId)
+                .last("FOR UPDATE"));
         if (candidate == null || !userId.equals(candidate.getUserId())) {
             throw new BusinessException(ResultCode.PROFILE_MEMORY_NOT_FOUND);
         }
