@@ -248,6 +248,52 @@ class ProfileMemoryGovernanceServiceTest {
     }
 
     @Test
+    void writeConfirmedMemoryReactivatesExistingSceneLinkForDuplicateDocumentId() {
+        doAnswer(invocation -> {
+            ProfileValues profile = invocation.getArgument(0);
+            profile.setId(223L);
+            return 1;
+        }).when(valuesRepository).insert(any(ProfileValues.class));
+        when(sceneMemoryService.saveSceneMemory(any(ProfileSceneMemoryService.SceneMemoryWrite.class)))
+                .thenReturn(new ProfileSceneMemoryService.SceneMemoryWriteResult(List.of("doc-reused")));
+        ProfileSceneMemoryLink existingLink = new ProfileSceneMemoryLink();
+        existingLink.setId(77L);
+        existingLink.setUserId(USER_ID);
+        existingLink.setProfileType("value");
+        existingLink.setProfileRecordId(111L);
+        existingLink.setDocumentId("doc-reused");
+        existingLink.setSource("profile_extract");
+        existingLink.setActive(false);
+        existingLink.setDeleteStatus("deleted");
+        when(linkRepository.selectOne(any(LambdaQueryWrapper.class))).thenReturn(existingLink);
+
+        ProfileMemoryGovernanceService.GovernanceResult result = service.writeConfirmedMemory(
+                new ProfileMemoryGovernanceService.ConfirmedMemoryCommand(
+                        USER_ID,
+                        "value",
+                        "生活节奏",
+                        "希望保留自主安排时间",
+                        "软边界",
+                        new BigDecimal("0.91"),
+                        List.of("我不想每天被排满"),
+                        "agent_tool_update",
+                        88L,
+                        "我不想每天被排满"));
+
+        assertThat(result.profileRecordId()).isEqualTo(223L);
+        verify(linkRepository, never()).insert(any(ProfileSceneMemoryLink.class));
+        verify(linkRepository).updateById(existingLink);
+        assertThat(existingLink.getUserId()).isEqualTo(USER_ID);
+        assertThat(existingLink.getProfileType()).isEqualTo("value");
+        assertThat(existingLink.getProfileRecordId()).isEqualTo(223L);
+        assertThat(existingLink.getDocumentId()).isEqualTo("doc-reused");
+        assertThat(existingLink.getSource()).isEqualTo("agent_tool_update");
+        assertThat(existingLink.getActive()).isTrue();
+        assertThat(existingLink.getDeleteStatus()).isEqualTo("active");
+        assertThat(existingLink.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
     void deleteProfileSoftInvalidatesValueAndMarksLinkedDocsDeletedOrDeleteFailed() {
         ProfileValues value = new ProfileValues();
         value.setId(301L);

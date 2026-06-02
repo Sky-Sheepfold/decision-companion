@@ -350,15 +350,29 @@ public class ProfileMemoryGovernanceService {
                         command.sourceConversationId(),
                         profileRecordId));
         for (String documentId : result.documentIds()) {
-            ProfileSceneMemoryLink link = new ProfileSceneMemoryLink();
-            link.setUserId(command.userId());
-            link.setProfileType(command.profileType());
-            link.setProfileRecordId(profileRecordId);
-            link.setDocumentId(documentId);
-            link.setSource(defaultIfBlank(command.source(), "profile_governance"));
-            link.setActive(true);
-            link.setDeleteStatus(LINK_ACTIVE);
-            linkRepository.insert(link);
+            ProfileSceneMemoryLink existingLink = linkRepository.selectOne(
+                    new LambdaQueryWrapper<ProfileSceneMemoryLink>()
+                            .eq(ProfileSceneMemoryLink::getDocumentId, documentId));
+            if (existingLink == null) {
+                ProfileSceneMemoryLink link = new ProfileSceneMemoryLink();
+                link.setUserId(command.userId());
+                link.setProfileType(command.profileType());
+                link.setProfileRecordId(profileRecordId);
+                link.setDocumentId(documentId);
+                link.setSource(defaultIfBlank(command.source(), "profile_governance"));
+                link.setActive(true);
+                link.setDeleteStatus(LINK_ACTIVE);
+                linkRepository.insert(link);
+                continue;
+            }
+            existingLink.setUserId(command.userId());
+            existingLink.setProfileType(command.profileType());
+            existingLink.setProfileRecordId(profileRecordId);
+            existingLink.setSource(defaultIfBlank(command.source(), "profile_governance"));
+            existingLink.setActive(true);
+            existingLink.setDeleteStatus(LINK_ACTIVE);
+            existingLink.setUpdatedAt(LocalDateTime.now());
+            linkRepository.updateById(existingLink);
         }
     }
 
