@@ -1,12 +1,6 @@
 package com.sky.decisioncompanion.service.agenttool;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sky.decisioncompanion.config.MemoryRetrievalProperties;
-import com.sky.decisioncompanion.model.ProfileEmotion;
-import com.sky.decisioncompanion.model.ProfileFear;
-import com.sky.decisioncompanion.model.ProfileRelationship;
-import com.sky.decisioncompanion.model.ProfileValues;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
@@ -15,6 +9,9 @@ import com.sky.decisioncompanion.service.memory.DecisionRecallService;
 import com.sky.decisioncompanion.service.memory.MemoryContext;
 import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
+import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService;
+import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService.ConfirmedMemoryCommand;
+import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService.MemoryCandidateCommand;
 import com.sky.decisioncompanion.service.profile.ProfileWritePolicy;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -25,7 +22,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,17 +43,12 @@ public class DecisionAgentToolService {
             "我正在考虑", "我在考虑", "我正在纠结", "我在纠结", "我纠结", "帮我看看", "请帮我看看",
             "是否要", "是否", "要不要", "该不该", "能不能", "可以吗", "吗", "呢");
     private static final List<String> NEGATION_MARKERS = List.of("不", "没", "未", "拒绝", "放弃", "取消");
-    private final ProfileValuesRepository valuesRepository;
-    private final ProfileEmotionRepository emotionRepository;
-    private final ProfileRelationshipRepository relationshipRepository;
-    private final ProfileFearRepository fearRepository;
     private final MemoryRetrievalService memoryRetrievalService;
-    private final ProfileSceneMemoryService profileSceneMemoryService;
+    private final ProfileMemoryGovernanceService profileMemoryGovernanceService;
     private final DecisionRecallService decisionRecallService;
     private final MemoryRetrievalProperties properties;
     private final AgentToolCallLogService logService;
     private final AgentToolInvocationTracker invocationTracker;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public DecisionAgentToolService(
             ProfileValuesRepository valuesRepository,
@@ -66,16 +57,13 @@ public class DecisionAgentToolService {
             ProfileFearRepository fearRepository,
             MemoryRetrievalService memoryRetrievalService,
             ProfileSceneMemoryService profileSceneMemoryService,
+            ProfileMemoryGovernanceService profileMemoryGovernanceService,
             DecisionRecallService decisionRecallService,
             MemoryRetrievalProperties properties,
             AgentToolCallLogService logService,
             AgentToolInvocationTracker invocationTracker) {
-        this.valuesRepository = valuesRepository;
-        this.emotionRepository = emotionRepository;
-        this.relationshipRepository = relationshipRepository;
-        this.fearRepository = fearRepository;
         this.memoryRetrievalService = memoryRetrievalService;
-        this.profileSceneMemoryService = profileSceneMemoryService;
+        this.profileMemoryGovernanceService = profileMemoryGovernanceService;
         this.decisionRecallService = decisionRecallService;
         this.properties = properties;
         this.logService = logService;
@@ -232,6 +220,18 @@ public class DecisionAgentToolService {
 
             ProfileWriteDecision writeDecision = decideProfileWrite(normalizedType, confidence);
             if (!writeDecision.writable()) {
+                if ("needs_confirmation".equals(writeDecision.action())) {
+                    profileMemoryGovernanceService.createCandidate(new MemoryCandidateCommand(
+                            context.userId(),
+                            normalizedType,
+                            clean(subject),
+                            clean(content),
+                            clean(detail),
+                            normalizeConfidence(confidence),
+                            safeList(evidence, 5),
+                            "agent_tool_update",
+                            context.conversationId()));
+                }
                 logService.recordSkipped(context.userId(), context.conversationId(), "updateUserProfile",
                         inputSummary, writeDecision.logSummary(), elapsedMillis(start));
                 logger.info("Agent Tool 未写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}, reason: {}",
@@ -241,30 +241,33 @@ public class DecisionAgentToolService {
                         false, writeDecision.message(), normalizedType, clean(subject), writeDecision.action());
             }
 
-            UpdateOutcome outcome = switch (normalizedType) {
-                case "value" -> upsertValueProfile(context.userId(), subject, content, confidence, evidence);
-                case "emotion" -> upsertEmotionProfile(context.userId(), subject, content, detail, evidence);
-                case "relationship" -> upsertRelationshipProfile(context.userId(), subject, content, detail);
-                case "fear", "boundary" -> upsertFearProfile(
-                        context.userId(), normalizedType, subject, content, detail, confidence, evidence);
-                default -> new UpdateOutcome(false, "暂不支持该画像类型", "skipped", clean(subject));
-            };
-
-            if (outcome.updated()) {
-                saveToolSceneMemory(context, normalizedType, subject, content, confidence, evidence);
+            ProfileMemoryGovernanceService.GovernanceResult governanceResult =
+                    profileMemoryGovernanceService.writeConfirmedMemory(new ConfirmedMemoryCommand(
+                            context.userId(),
+                            normalizedType,
+                            clean(subject),
+                            clean(content),
+                            clean(detail),
+                            normalizeConfidence(confidence),
+                            safeList(evidence, 5),
+                            "agent_tool_update",
+                            context.conversationId(),
+                            context.message()));
+            String resultAction = governanceResult.success() ? "written" : governanceResult.action();
+            if (governanceResult.success()) {
                 logService.recordSuccess(context.userId(), context.conversationId(), "updateUserProfile",
-                        inputSummary, "written " + normalizedType + ":" + outcome.subject(),
+                        inputSummary, "written " + normalizedType + ":" + clean(subject),
                         elapsedMillis(start));
                 logger.info("Agent Tool 已写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}",
-                        context.userId(), context.conversationId(), normalizedType, outcome.subject(), outcome.action());
+                        context.userId(), context.conversationId(), normalizedType, clean(subject), resultAction);
             } else {
                 logService.recordSkipped(context.userId(), context.conversationId(), "updateUserProfile",
-                        inputSummary, outcome.message(), elapsedMillis(start));
+                        inputSummary, governanceResult.message(), elapsedMillis(start));
                 logger.info("Agent Tool 未写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}, reason: {}",
-                        context.userId(), context.conversationId(), normalizedType, outcome.subject(), outcome.action(), outcome.message());
+                        context.userId(), context.conversationId(), normalizedType, clean(subject), resultAction, governanceResult.message());
             }
             return new UpdateUserProfileToolResult(
-                    outcome.updated(), outcome.message(), normalizedType, outcome.subject(), outcome.action());
+                    governanceResult.success(), governanceResult.message(), normalizedType, clean(subject), resultAction);
         } catch (Exception e) {
             logService.recordFailure(context.userId(), context.conversationId(), "updateUserProfile",
                     inputSummary, failureMessage("更新用户画像", e), elapsedMillis(start));
@@ -305,208 +308,6 @@ public class DecisionAgentToolService {
     private int deterministicScore(String topic, String option, String dimension) {
         int hash = Math.abs(Objects.hash(topic, option, dimension));
         return MIN_SCORE + (hash % (MAX_SCORE - MIN_SCORE + 1));
-    }
-
-    private UpdateOutcome upsertValueProfile(
-            Long userId,
-            String subject,
-            String content,
-            Double confidence,
-            List<String> evidence) {
-        String item = truncate(subject, 100);
-        String preference = truncate(content, 200);
-        if (!StringUtils.hasText(item) || !StringUtils.hasText(preference)) {
-            return new UpdateOutcome(false, "画像主体和内容不能为空", "skipped", item);
-        }
-
-        ProfileValues existing = findValue(userId, item);
-        if (existing == null) {
-            ProfileValues profile = new ProfileValues();
-            profile.setUserId(userId);
-            profile.setItem(item);
-            profile.setPreference(preference);
-            profile.setConfidence(normalizeConfidence(confidence));
-            profile.setEvidence(evidenceJson(evidence));
-            profile.setUpdatedAt(LocalDateTime.now());
-            valuesRepository.insert(profile);
-            return new UpdateOutcome(true, "已新增价值观画像", "written", item);
-        }
-
-        existing.setPreference(preference);
-        existing.setConfidence(normalizeConfidence(confidence));
-        existing.setEvidence(evidenceJson(evidence));
-        existing.setUpdatedAt(LocalDateTime.now());
-        valuesRepository.updateById(existing);
-        return new UpdateOutcome(true, "已更新价值观画像", "written", item);
-    }
-
-    private UpdateOutcome upsertEmotionProfile(
-            Long userId,
-            String subject,
-            String content,
-            String detail,
-            List<String> evidence) {
-        String emotion = truncate(subject, 100);
-        String behavior = truncate(content, 500);
-        String triggerDesc = truncate(detail, 200);
-        if (!StringUtils.hasText(emotion) || !StringUtils.hasText(behavior)) {
-            return new UpdateOutcome(false, "画像主体和内容不能为空", "skipped", emotion);
-        }
-
-        ProfileEmotion existing = findEmotion(userId, emotion, triggerDesc);
-        if (existing == null) {
-            ProfileEmotion profile = new ProfileEmotion();
-            profile.setUserId(userId);
-            profile.setEmotion(emotion);
-            profile.setBehavior(behavior);
-            profile.setTriggerDesc(triggerDesc);
-            profile.setAgentNote(evidenceSummary(evidence));
-            profile.setUpdatedAt(LocalDateTime.now());
-            emotionRepository.insert(profile);
-            return new UpdateOutcome(true, "已新增情绪模式画像", "written", emotion);
-        }
-
-        existing.setBehavior(behavior);
-        existing.setTriggerDesc(triggerDesc);
-        existing.setAgentNote(evidenceSummary(evidence));
-        existing.setUpdatedAt(LocalDateTime.now());
-        emotionRepository.updateById(existing);
-        return new UpdateOutcome(true, "已更新情绪模式画像", "written", emotion);
-    }
-
-    private UpdateOutcome upsertRelationshipProfile(Long userId, String subject, String content, String detail) {
-        String name = truncate(subject, 50);
-        String note = truncate(content, 500);
-        String role = truncate(detail, 50);
-        if (!StringUtils.hasText(name) || !StringUtils.hasText(note)) {
-            return new UpdateOutcome(false, "画像主体和内容不能为空", "skipped", name);
-        }
-
-        ProfileRelationship existing = findRelationship(userId, name);
-        if (existing == null) {
-            ProfileRelationship profile = new ProfileRelationship();
-            profile.setUserId(userId);
-            profile.setName(name);
-            profile.setRole(role);
-            profile.setNote(note);
-            profile.setUpdatedAt(LocalDateTime.now());
-            relationshipRepository.insert(profile);
-            return new UpdateOutcome(true, "已新增关系画像", "written", name);
-        }
-
-        if (StringUtils.hasText(role)) {
-            existing.setRole(role);
-        }
-        existing.setNote(note);
-        existing.setUpdatedAt(LocalDateTime.now());
-        relationshipRepository.updateById(existing);
-        return new UpdateOutcome(true, "已更新关系画像", "written", name);
-    }
-
-    private UpdateOutcome upsertFearProfile(
-            Long userId,
-            String profileType,
-            String subject,
-            String content,
-            String detail,
-            Double confidence,
-            List<String> evidence) {
-        String type = "boundary".equals(profileType) ? "boundary" : "fear";
-        String description = truncate(subject, 500);
-        String manifestation = truncate(content, 500);
-        if (!StringUtils.hasText(description) || !StringUtils.hasText(manifestation)) {
-            return new UpdateOutcome(false, "画像主体和内容不能为空", "skipped", description);
-        }
-
-        ProfileFear existing = findFear(userId, type, description);
-        if (existing == null) {
-            ProfileFear profile = new ProfileFear();
-            profile.setUserId(userId);
-            profile.setType(type);
-            profile.setDescription(description);
-            profile.setManifestation(manifestation);
-            profile.setConfidence(normalizeConfidence(confidence));
-            profile.setEvidence(evidenceJson(evidence));
-            profile.setBoundaryType("boundary".equals(type) ? normalizeBoundaryType(detail) : "");
-            profile.setUpdatedAt(LocalDateTime.now());
-            fearRepository.insert(profile);
-            return new UpdateOutcome(true, "已新增恐惧与边界画像", "written", description);
-        }
-
-        existing.setManifestation(manifestation);
-        existing.setConfidence(normalizeConfidence(confidence));
-        existing.setEvidence(evidenceJson(evidence));
-        if ("boundary".equals(type)) {
-            existing.setBoundaryType(normalizeBoundaryType(detail));
-        }
-        existing.setUpdatedAt(LocalDateTime.now());
-        fearRepository.updateById(existing);
-        return new UpdateOutcome(true, "已更新恐惧与边界画像", "written", description);
-    }
-
-    private void saveToolSceneMemory(
-            AgentToolContext.Execution context,
-            String profileType,
-            String subject,
-            String content,
-            Double confidence,
-            List<String> evidence) {
-        String safeSubject = truncate(subject, 100);
-        String safeContent = truncate(content, 500);
-        profileSceneMemoryService.saveSceneMemory(new ProfileSceneMemoryService.SceneMemoryWrite(
-                context.userId(),
-                context.message(),
-                "agent_tool_update",
-                1,
-                List.of(profileType),
-                safeList(evidence, 5),
-                List.of(profileType + ":" + safeSubject + ":" + safeContent),
-                profileType,
-                normalizeConfidence(confidence),
-                context.conversationId(),
-                null));
-    }
-
-    private ProfileValues findValue(Long userId, String item) {
-        return safeRepositoryList(valuesRepository.selectList(new LambdaQueryWrapper<ProfileValues>()
-                        .eq(ProfileValues::getUserId, userId)))
-                .stream()
-                .filter(value -> Objects.equals(userId, value.getUserId()))
-                .filter(value -> normalizeKey(value.getItem()).equals(normalizeKey(item)))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private ProfileEmotion findEmotion(Long userId, String emotion, String triggerDesc) {
-        return safeRepositoryList(emotionRepository.selectList(new LambdaQueryWrapper<ProfileEmotion>()
-                        .eq(ProfileEmotion::getUserId, userId)))
-                .stream()
-                .filter(value -> Objects.equals(userId, value.getUserId()))
-                .filter(value -> normalizeKey(value.getEmotion()).equals(normalizeKey(emotion)))
-                .filter(value -> normalizeKey(value.getTriggerDesc()).equals(normalizeKey(triggerDesc)))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private ProfileRelationship findRelationship(Long userId, String name) {
-        return safeRepositoryList(relationshipRepository.selectList(new LambdaQueryWrapper<ProfileRelationship>()
-                        .eq(ProfileRelationship::getUserId, userId)))
-                .stream()
-                .filter(value -> Objects.equals(userId, value.getUserId()))
-                .filter(value -> normalizeKey(value.getName()).equals(normalizeKey(name)))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private ProfileFear findFear(Long userId, String type, String description) {
-        return safeRepositoryList(fearRepository.selectList(new LambdaQueryWrapper<ProfileFear>()
-                        .eq(ProfileFear::getUserId, userId)))
-                .stream()
-                .filter(value -> Objects.equals(userId, value.getUserId()))
-                .filter(value -> normalizeKey(value.getType()).equals(normalizeKey(type)))
-                .filter(value -> normalizeKey(value.getDescription()).equals(normalizeKey(description)))
-                .findFirst()
-                .orElse(null);
     }
 
     private String duplicateSemanticRecallReason(AgentToolContext.Execution context, String query) {
@@ -655,33 +456,6 @@ public class DecisionAgentToolService {
                 decision.logSummary());
     }
 
-    private String normalizeBoundaryType(String value) {
-        String normalized = clean(value).toLowerCase(Locale.ROOT);
-        if (normalized.contains("hard") || normalized.contains("硬")) {
-            return "hard";
-        }
-        if (normalized.contains("soft") || normalized.contains("软")) {
-            return "soft";
-        }
-        return "";
-    }
-
-    private String evidenceJson(List<String> evidence) {
-        List<String> values = safeList(evidence, 5);
-        if (values.isEmpty()) {
-            return "[]";
-        }
-        try {
-            return objectMapper.writeValueAsString(values);
-        } catch (Exception e) {
-            return "[]";
-        }
-    }
-
-    private String evidenceSummary(List<String> evidence) {
-        return String.join("；", safeList(evidence, 5));
-    }
-
     private String summarizeDecisions(List<DecisionHistoryItem> items) {
         return items.stream()
                 .map(item -> item.topic() + ":" + item.choice())
@@ -706,22 +480,6 @@ public class DecisionAgentToolService {
 
     private String clean(String value) {
         return value == null ? "" : value.trim();
-    }
-
-    private String truncate(String value, int maxLength) {
-        String cleaned = clean(value);
-        if (cleaned.isBlank()) {
-            return "";
-        }
-        return cleaned.length() <= maxLength ? cleaned : cleaned.substring(0, maxLength);
-    }
-
-    private String normalizeKey(String value) {
-        return clean(value).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
-    }
-
-    private <T> List<T> safeRepositoryList(List<T> values) {
-        return values == null ? List.of() : values;
     }
 
     private long elapsedMillis(long start) {
@@ -765,9 +523,6 @@ public class DecisionAgentToolService {
             String profileType,
             String subject,
             String action) {
-    }
-
-    private record UpdateOutcome(boolean updated, String message, String action, String subject) {
     }
 
     private record ProfileWriteDecision(boolean writable, String action, String message, String logSummary) {

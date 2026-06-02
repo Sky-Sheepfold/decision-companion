@@ -1,7 +1,6 @@
 package com.sky.decisioncompanion.service.agenttool;
 
 import com.sky.decisioncompanion.config.MemoryRetrievalProperties;
-import com.sky.decisioncompanion.model.ProfileValues;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
@@ -10,9 +9,13 @@ import com.sky.decisioncompanion.service.memory.DecisionRecallService;
 import com.sky.decisioncompanion.service.memory.MemoryContext;
 import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
+import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService;
+import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService.ConfirmedMemoryCommand;
+import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService.MemoryCandidateCommand;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.model.ToolContext;
@@ -25,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -52,6 +56,9 @@ class DecisionAgentToolServiceTest {
     private ProfileSceneMemoryService profileSceneMemoryService;
 
     @Mock
+    private ProfileMemoryGovernanceService profileMemoryGovernanceService;
+
+    @Mock
     private DecisionRecallService decisionRecallService;
 
     @Mock
@@ -73,6 +80,7 @@ class DecisionAgentToolServiceTest {
                 fearRepository,
                 memoryRetrievalService,
                 profileSceneMemoryService,
+                profileMemoryGovernanceService,
                 decisionRecallService,
                 properties,
                 logService,
@@ -262,104 +270,86 @@ class DecisionAgentToolServiceTest {
     }
 
     @Test
-    void updateUserProfileUpdatesCurrentUsersValueCorrection() {
-        ProfileValues currentUserValue = new ProfileValues();
-        currentUserValue.setId(10L);
-        currentUserValue.setUserId(USER_ID);
-        currentUserValue.setItem("城市偏好");
-        currentUserValue.setPreference("更向往大城市机会");
-        currentUserValue.setConfidence(new BigDecimal("0.70"));
-
-        ProfileValues anotherUserValue = new ProfileValues();
-        anotherUserValue.setId(20L);
-        anotherUserValue.setUserId(2L);
-        anotherUserValue.setItem("城市偏好");
-        anotherUserValue.setPreference("留在本地");
-        anotherUserValue.setConfidence(new BigDecimal("0.90"));
-
-        when(valuesRepository.selectList(any())).thenReturn(List.of(anotherUserValue, currentUserValue));
+    void updateUserProfileWritesConfirmedMemoryWhenConfidenceHigh() {
+        when(profileMemoryGovernanceService.writeConfirmedMemory(any(ConfirmedMemoryCommand.class)))
+                .thenReturn(new ProfileMemoryGovernanceService.GovernanceResult(
+                        true,
+                        "confirm",
+                        "value",
+                        10L,
+                        null,
+                        "画像记忆已写入"));
 
         DecisionAgentToolService.UpdateUserProfileToolResult result = service.updateUserProfile(
                 "value",
-                "城市偏好",
-                "其实我更偏向离家近的城市",
-                null,
+                " 城市偏好 ",
+                " 其实我更偏向离家近的城市 ",
+                "  长期规划 ",
                 0.95,
-                List.of("其实我更偏向离家近的城市"),
+                List.of("其实我更偏向离家近的城市", "我怕离家太远", " ", "多余1", "多余2", "多余3"),
                 correctedToolContext());
 
         assertThat(result.updated()).isTrue();
         assertThat(result.profileType()).isEqualTo("value");
         assertThat(result.subject()).isEqualTo("城市偏好");
-        assertThat(currentUserValue.getPreference()).isEqualTo("其实我更偏向离家近的城市");
-        assertThat(currentUserValue.getConfidence()).isEqualByComparingTo("0.95");
-        assertThat(currentUserValue.getEvidence()).contains("离家近");
-        verify(valuesRepository).updateById(currentUserValue);
+        assertThat(result.action()).isEqualTo("written");
+        assertThat(result.message()).isEqualTo("画像记忆已写入");
+
+        ArgumentCaptor<ConfirmedMemoryCommand> commandCaptor = ArgumentCaptor.forClass(ConfirmedMemoryCommand.class);
+        verify(profileMemoryGovernanceService).writeConfirmedMemory(commandCaptor.capture());
+        ConfirmedMemoryCommand command = commandCaptor.getValue();
+        assertThat(command.userId()).isEqualTo(USER_ID);
+        assertThat(command.profileType()).isEqualTo("value");
+        assertThat(command.subject()).isEqualTo("城市偏好");
+        assertThat(command.content()).isEqualTo("其实我更偏向离家近的城市");
+        assertThat(command.detail()).isEqualTo("长期规划");
+        assertThat(command.confidence()).isEqualByComparingTo(new BigDecimal("0.95"));
+        assertThat(command.evidence())
+                .containsExactly("其实我更偏向离家近的城市", "我怕离家太远", "多余1", "多余2", "多余3");
+        assertThat(command.source()).isEqualTo("agent_tool_update");
+        assertThat(command.sourceConversationId()).isEqualTo(CONVERSATION_ID);
+        assertThat(command.userMessage()).isEqualTo("你刚才理解不对，城市偏好请更新成其实我更偏向离家近的城市");
+        verify(profileMemoryGovernanceService, never()).createCandidate(any(MemoryCandidateCommand.class));
+        verifyNoInteractions(valuesRepository);
+        verify(profileSceneMemoryService, never()).saveSceneMemory(any());
         verify(logService).recordSuccess(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
                 argThat(summary -> summary.contains("profileType=value")
-                        && summary.contains("subject=城市偏好")),
+                        && summary.contains("subject= 城市偏好 ")),
                 contains("written value:城市偏好"), anyLong());
     }
 
     @Test
-    void updateUserProfileWritesHighConfidenceProfileWhenAgentTriggers() {
-        when(valuesRepository.selectList(any())).thenReturn(List.of());
-
+    void updateUserProfileCreatesCandidateWhenNeedsConfirmation() {
         DecisionAgentToolService.UpdateUserProfileToolResult result = service.updateUserProfile(
-                "value",
-                "城市偏好",
-                "更偏向离家近的城市",
-                null,
-                0.95,
-                List.of("我怕离家太远"),
-                toolContext());
-
-        assertThat(result.updated()).isTrue();
-        assertThat(result.action()).isEqualTo("written");
-
-        var valueCaptor = org.mockito.ArgumentCaptor.forClass(ProfileValues.class);
-        verify(valuesRepository).insert(valueCaptor.capture());
-        ProfileValues saved = valueCaptor.getValue();
-        assertThat(saved.getUserId()).isEqualTo(USER_ID);
-        assertThat(saved.getItem()).isEqualTo("城市偏好");
-        assertThat(saved.getPreference()).isEqualTo("更偏向离家近的城市");
-        assertThat(saved.getEvidence()).contains("离家太远");
-        verify(logService).recordSuccess(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
-                contains("profileType=value"),
-                contains("written value:城市偏好"), anyLong());
-        verify(profileSceneMemoryService).saveSceneMemory(argThat(memory ->
-                USER_ID.equals(memory.userId())
-                        && "我正在考虑是否接受外地 offer".equals(memory.userMessage())
-                        && "agent_tool_update".equals(memory.source())
-                        && memory.profileRecordCount() == 1
-                        && memory.profileTypes().equals(List.of("value"))
-                        && "value".equals(memory.memoryType())
-                        && memory.confidence().compareTo(new BigDecimal("0.95")) == 0
-                        && CONVERSATION_ID.equals(memory.sourceConversationId())
-                        && memory.evidence().equals(List.of("我怕离家太远"))
-                        && memory.sceneSignals().equals(List.of("value:城市偏好:更偏向离家近的城市"))));
-        verify(toolInvocationTracker).markCalled("req-1", "updateUserProfile");
-    }
-
-    @Test
-    void updateUserProfileAsksConfirmationForMediumConfidenceProfile() {
-        DecisionAgentToolService.UpdateUserProfileToolResult result = service.updateUserProfile(
-                "value",
-                "城市偏好",
-                "更偏向离家近的城市",
-                null,
+                "values",
+                " 城市偏好 ",
+                " 更偏向离家近的城市 ",
+                " 长期规划 ",
                 0.70,
-                List.of("我怕离家太远"),
+                List.of("我怕离家太远", " ", "想离家近一点"),
                 toolContext());
 
         assertThat(result.updated()).isFalse();
         assertThat(result.action()).isEqualTo("needs_confirmation");
         assertThat(result.message()).contains("确认");
-        verify(valuesRepository, never()).insert(any(ProfileValues.class));
-        verify(valuesRepository, never()).updateById(any(ProfileValues.class));
+
+        ArgumentCaptor<MemoryCandidateCommand> commandCaptor = ArgumentCaptor.forClass(MemoryCandidateCommand.class);
+        verify(profileMemoryGovernanceService).createCandidate(commandCaptor.capture());
+        MemoryCandidateCommand command = commandCaptor.getValue();
+        assertThat(command.userId()).isEqualTo(USER_ID);
+        assertThat(command.profileType()).isEqualTo("value");
+        assertThat(command.subject()).isEqualTo("城市偏好");
+        assertThat(command.content()).isEqualTo("更偏向离家近的城市");
+        assertThat(command.detail()).isEqualTo("长期规划");
+        assertThat(command.confidence()).isEqualByComparingTo(new BigDecimal("0.70"));
+        assertThat(command.evidence()).containsExactly("我怕离家太远", "想离家近一点");
+        assertThat(command.source()).isEqualTo("agent_tool_update");
+        assertThat(command.sourceConversationId()).isEqualTo(CONVERSATION_ID);
+        verify(profileMemoryGovernanceService, never()).writeConfirmedMemory(any(ConfirmedMemoryCommand.class));
         verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
                 contains("profileType=value"),
                 contains("needs_confirmation"), anyLong());
+        verifyNoInteractions(valuesRepository);
         verify(profileSceneMemoryService, never()).saveSceneMemory(any());
     }
 
@@ -377,8 +367,8 @@ class DecisionAgentToolServiceTest {
         assertThat(result.updated()).isFalse();
         assertThat(result.action()).isEqualTo("skipped");
         assertThat(result.message()).contains("置信度");
-        verify(valuesRepository, never()).insert(any(ProfileValues.class));
-        verify(valuesRepository, never()).updateById(any(ProfileValues.class));
+        verifyNoInteractions(profileMemoryGovernanceService);
+        verifyNoInteractions(valuesRepository);
         verify(logService).recordSkipped(eq(USER_ID), eq(CONVERSATION_ID), eq("updateUserProfile"),
                 contains("profileType=value"),
                 contains("confidence too low"), anyLong());
