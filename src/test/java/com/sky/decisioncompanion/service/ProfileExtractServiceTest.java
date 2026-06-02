@@ -1,14 +1,13 @@
 package com.sky.decisioncompanion.service;
 
 import com.sky.decisioncompanion.model.ProfileDecision;
-import com.sky.decisioncompanion.model.ProfileFear;
-import com.sky.decisioncompanion.model.ProfileValues;
 import com.sky.decisioncompanion.repository.ProfileDecisionRepository;
 import com.sky.decisioncompanion.repository.ProfileEmotionRepository;
 import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
+import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,15 +16,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -59,6 +55,9 @@ class ProfileExtractServiceTest {
     @Mock
     private ProfileSceneMemoryService profileSceneMemoryService;
 
+    @Mock
+    private ProfileMemoryGovernanceService profileMemoryGovernanceService;
+
     private ProfileExtractService service;
 
     @BeforeEach
@@ -75,7 +74,7 @@ class ProfileExtractServiceTest {
                     {
                       "item": "稳定",
                       "preference": "更想要稳定",
-                      "confidence": 0.84,
+                      "confidence": 0.59,
                       "evidence": ["我更想要稳定"]
                     }
                   ],
@@ -83,7 +82,7 @@ class ProfileExtractServiceTest {
                     {
                       "type": "fear",
                       "description": "害怕失败",
-                      "confidence": 0.89,
+                      "confidence": 0.69,
                       "evidence": ["我怕失败"]
                     }
                   ]
@@ -93,47 +92,49 @@ class ProfileExtractServiceTest {
         int saved = service.saveAnalysis(USER_ID, "我更想要稳定，但也怕失败", analysis);
 
         assertThat(saved).isZero();
-        verify(valuesRepository, never()).insert(any(ProfileValues.class));
-        verify(valuesRepository, never()).updateById(any(ProfileValues.class));
-        verify(fearRepository, never()).insert(any(ProfileFear.class));
-        verify(fearRepository, never()).updateById(any(ProfileFear.class));
+        verify(profileMemoryGovernanceService, never()).createCandidate(any());
+        verify(profileMemoryGovernanceService, never()).writeConfirmedMemory(any());
         verifyNoInteractions(profileSceneMemoryService);
     }
 
     @Test
-    void skipsMediumConfidenceSensitiveProfileThatNeedsConfirmation() {
+    void mediumConfidenceValueCreatesPendingCandidate() {
         String analysis = """
                 {
-                  "fears": [
+                  "values": [
                     {
-                      "type": "fear",
-                      "description": "失去对生活节奏的掌控",
-                      "manifestation": "未明确描述具体表现",
-                      "confidence": 0.85,
-                      "evidence": ["失去对生活节奏的掌控"]
+                      "item": "稳定",
+                      "preference": "更看重长期确定性",
+                      "confidence": 0.84,
+                      "evidence": ["我还是想稳定一点"]
                     }
                   ]
                 }
                 """;
 
-        int saved = service.saveAnalysis(USER_ID, "我担心失去对生活节奏的掌控", analysis);
+        int saved = service.saveAnalysis(USER_ID, "我还是想稳定一点", analysis);
 
         assertThat(saved).isZero();
-        verify(fearRepository, never()).insert(any(ProfileFear.class));
-        verify(fearRepository, never()).updateById(any(ProfileFear.class));
+        ArgumentCaptor<ProfileMemoryGovernanceService.MemoryCandidateCommand> captor =
+                ArgumentCaptor.forClass(ProfileMemoryGovernanceService.MemoryCandidateCommand.class);
+        verify(profileMemoryGovernanceService).createCandidate(captor.capture());
+        ProfileMemoryGovernanceService.MemoryCandidateCommand command = captor.getValue();
+        assertThat(command.userId()).isEqualTo(USER_ID);
+        assertThat(command.profileType()).isEqualTo("value");
+        assertThat(command.subject()).isEqualTo("稳定");
+        assertThat(command.content()).isEqualTo("更看重长期确定性");
+        assertThat(command.confidence()).isEqualByComparingTo("0.84");
+        assertThat(command.evidence()).containsExactly("我还是想稳定一点");
+        assertThat(command.source()).isEqualTo("profile_extract");
+        verify(profileMemoryGovernanceService, never()).writeConfirmedMemory(any());
         verifyNoInteractions(profileSceneMemoryService);
     }
 
     @Test
-    void updatesExistingValueInsteadOfInsertingDuplicate() {
-        ProfileValues existing = new ProfileValues();
-        existing.setId(15L);
-        existing.setUserId(USER_ID);
-        existing.setItem("稳定");
-        existing.setPreference("旧描述");
-        existing.setConfidence(new BigDecimal("0.70"));
-        existing.setEvidence("[\"旧证据\"]");
-        when(valuesRepository.selectList(any())).thenReturn(List.of(existing));
+    void highConfidenceValueWritesConfirmedMemoryThroughGovernance() {
+        when(profileMemoryGovernanceService.writeConfirmedMemory(any()))
+                .thenReturn(new ProfileMemoryGovernanceService.GovernanceResult(
+                        true, "confirm", "value", 101L, null, "画像记忆已写入"));
 
         String analysis = """
                 {
@@ -151,20 +152,27 @@ class ProfileExtractServiceTest {
         int saved = service.saveAnalysis(USER_ID, "我还是想稳定一点", analysis);
 
         assertThat(saved).isEqualTo(1);
-        ArgumentCaptor<ProfileValues> captor = ArgumentCaptor.forClass(ProfileValues.class);
-        verify(valuesRepository).updateById(captor.capture());
-        verify(valuesRepository, never()).insert(any(ProfileValues.class));
-        ProfileValues updated = captor.getValue();
-        assertThat(updated.getId()).isEqualTo(15L);
-        assertThat(updated.getPreference()).isEqualTo("更看重长期确定性");
-        assertThat(updated.getConfidence()).isEqualByComparingTo("0.90");
-        assertThat(updated.getEvidence()).contains("我还是想稳定一点");
-        verify(profileSceneMemoryService).saveSceneMemory(argThat(memory -> memory.profileRecordCount() == 1));
+        ArgumentCaptor<ProfileMemoryGovernanceService.ConfirmedMemoryCommand> captor =
+                ArgumentCaptor.forClass(ProfileMemoryGovernanceService.ConfirmedMemoryCommand.class);
+        verify(profileMemoryGovernanceService).writeConfirmedMemory(captor.capture());
+        ProfileMemoryGovernanceService.ConfirmedMemoryCommand command = captor.getValue();
+        assertThat(command.userId()).isEqualTo(USER_ID);
+        assertThat(command.profileType()).isEqualTo("value");
+        assertThat(command.subject()).isEqualTo("稳定");
+        assertThat(command.content()).isEqualTo("更看重长期确定性");
+        assertThat(command.confidence()).isEqualByComparingTo("0.90");
+        assertThat(command.evidence()).containsExactly("我还是想稳定一点");
+        assertThat(command.source()).isEqualTo("profile_extract");
+        assertThat(command.userMessage()).isEqualTo("我还是想稳定一点");
+        verify(profileMemoryGovernanceService, never()).createCandidate(any());
+        verifyNoInteractions(profileSceneMemoryService);
     }
 
     @Test
-    void writesSceneEvidenceMemoryToVectorStoreInsteadOfDuplicatingProfileSummary() {
-        when(valuesRepository.selectList(any())).thenReturn(List.of());
+    void highConfidenceValueAndMediumConfidenceFearUseGovernanceWithoutDirectSceneMemory() {
+        when(profileMemoryGovernanceService.writeConfirmedMemory(any()))
+                .thenReturn(new ProfileMemoryGovernanceService.GovernanceResult(
+                        true, "confirm", "value", 101L, null, "画像记忆已写入"));
 
         String analysis = """
                 {
@@ -175,6 +183,15 @@ class ProfileExtractServiceTest {
                       "confidence": 0.92,
                       "evidence": ["我怕离家太远以后没时间陪父母"]
                     }
+                  ],
+                  "fears": [
+                    {
+                      "type": "fear",
+                      "description": "担心无法陪伴父母",
+                      "manifestation": "害怕离家太远",
+                      "confidence": 0.85,
+                      "evidence": ["我怕离家太远以后没时间陪父母"]
+                    }
                   ]
                 }
                 """;
@@ -182,20 +199,17 @@ class ProfileExtractServiceTest {
         int saved = service.saveAnalysis(USER_ID, "我怕离家太远以后没时间陪父母", analysis);
 
         assertThat(saved).isEqualTo(1);
-        ArgumentCaptor<ProfileSceneMemoryService.SceneMemoryWrite> captor =
-                ArgumentCaptor.forClass(ProfileSceneMemoryService.SceneMemoryWrite.class);
-        verify(profileSceneMemoryService).saveSceneMemory(captor.capture());
-        ProfileSceneMemoryService.SceneMemoryWrite memory = captor.getValue();
-
-        assertThat(memory.userId()).isEqualTo(USER_ID);
-        assertThat(memory.userMessage()).isEqualTo("我怕离家太远以后没时间陪父母");
-        assertThat(memory.source()).isEqualTo("profile_extract");
-        assertThat(memory.profileRecordCount()).isEqualTo(1);
-        assertThat(memory.profileTypes()).containsExactly("values");
-        assertThat(memory.memoryType()).isEqualTo("values");
-        assertThat(memory.confidence()).isEqualByComparingTo("0.92");
-        assertThat(memory.evidence()).containsExactly("我怕离家太远以后没时间陪父母");
-        assertThat(memory.sceneSignals()).containsExactly("value:城市偏好:希望离父母近一点");
+        ArgumentCaptor<ProfileMemoryGovernanceService.ConfirmedMemoryCommand> confirmedCaptor =
+                ArgumentCaptor.forClass(ProfileMemoryGovernanceService.ConfirmedMemoryCommand.class);
+        ArgumentCaptor<ProfileMemoryGovernanceService.MemoryCandidateCommand> candidateCaptor =
+                ArgumentCaptor.forClass(ProfileMemoryGovernanceService.MemoryCandidateCommand.class);
+        verify(profileMemoryGovernanceService).writeConfirmedMemory(confirmedCaptor.capture());
+        verify(profileMemoryGovernanceService).createCandidate(candidateCaptor.capture());
+        assertThat(confirmedCaptor.getValue().profileType()).isEqualTo("value");
+        assertThat(confirmedCaptor.getValue().subject()).isEqualTo("城市偏好");
+        assertThat(candidateCaptor.getValue().profileType()).isEqualTo("fear");
+        assertThat(candidateCaptor.getValue().subject()).isEqualTo("担心无法陪伴父母");
+        verifyNoInteractions(profileSceneMemoryService);
     }
 
     @Test
@@ -224,36 +238,36 @@ class ProfileExtractServiceTest {
 
         assertThat(saved).isZero();
         verify(decisionRepository, never()).insert(any(ProfileDecision.class));
+        verifyNoInteractions(profileMemoryGovernanceService);
         verifyNoInteractions(profileSceneMemoryService);
     }
 
     @Test
-    void validRecordPersistsWhenSceneMemoryWriteFails() {
-        when(valuesRepository.selectList(any())).thenReturn(List.of());
-        doThrow(new RuntimeException("chroma down"))
-                .when(profileSceneMemoryService)
-                .saveSceneMemory(any(ProfileSceneMemoryService.SceneMemoryWrite.class));
+    void decisionPersistsThroughDecisionRepositoryWithoutGovernance() {
+        when(decisionRepository.selectList(any())).thenReturn(List.of());
 
         String analysis = """
                 {
-                  "values": [
+                  "decisions": [
                     {
-                      "item": "自由度",
-                      "preference": "希望保留自主安排时间的空间",
-                      "confidence": 0.90,
-                      "evidence": ["我不想每天被排满"]
+                      "topic": "是否接受 offer",
+                      "choice": "接受 A 公司",
+                      "reason": "成长空间更大",
+                      "evidence": ["我决定接受 A 公司"]
                     }
                   ]
                 }
                 """;
 
-        int saved = service.saveAnalysis(USER_ID, "我不想每天被排满", analysis);
+        int saved = service.saveAnalysis(USER_ID, "我在纠结 offer，最后决定接受 A 公司", analysis);
 
         assertThat(saved).isEqualTo(1);
-        ArgumentCaptor<ProfileValues> captor = ArgumentCaptor.forClass(ProfileValues.class);
-        verify(valuesRepository).insert(captor.capture());
-        assertThat(captor.getValue().getItem()).isEqualTo("自由度");
-        assertThat(captor.getValue().getEvidence()).contains("我不想每天被排满");
+        ArgumentCaptor<ProfileDecision> captor = ArgumentCaptor.forClass(ProfileDecision.class);
+        verify(decisionRepository).insert(captor.capture());
+        assertThat(captor.getValue().getTopic()).isEqualTo("是否接受 offer");
+        assertThat(captor.getValue().getChoice()).isEqualTo("接受 A 公司");
+        verifyNoInteractions(profileMemoryGovernanceService);
+        verifyNoInteractions(profileSceneMemoryService);
     }
 
     private ProfileExtractService serviceWithSceneMemory(ProfileSceneMemoryService profileSceneMemoryService) {
@@ -264,6 +278,7 @@ class ProfileExtractServiceTest {
                 emotionRepository,
                 relationshipRepository,
                 fearRepository,
-                profileSceneMemoryService);
+                profileSceneMemoryService,
+                profileMemoryGovernanceService);
     }
 }
