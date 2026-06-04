@@ -1,157 +1,171 @@
-<svg width="1120" height="760" viewBox="0 0 1120 760" role="img" aria-labelledby="title desc" xmlns="http://www.w3.org/2000/svg">
+<svg width="1280" height="820" viewBox="0 0 1280 820" role="img" aria-labelledby="title desc" xmlns="http://www.w3.org/2000/svg">
   <title id="title">人生决策伙伴 Agent 架构图</title>
-  <desc id="desc">展示人生决策伙伴 Agent 从用户、前端、后端服务、AI 模型到 MySQL 和 Chroma 存储层的整体架构。</desc>
+  <desc id="desc">展示人生决策伙伴 Agent 的前端、后端 Agent 编排、Memory RAG、Agent Tools、模型调用、MySQL 与 Chroma 记忆存储闭环。</desc>
+
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#8A7A66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#8A6A45" flood-opacity="0.12"/>
+    <linearGradient id="pageBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FAFBFF"/>
+      <stop offset="100%" stop-color="#F6F1EA"/>
+    </linearGradient>
+
+    <filter id="shadow" x="-12%" y="-12%" width="124%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#1B2740" flood-opacity="0.10"/>
     </filter>
+
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#526071" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <marker id="arrowWarm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#A8663F" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
     <style>
-      .bg { fill: #FFF9F1; }
-      .panel { fill: #FFFFFF; stroke: #E8D8C4; stroke-width: 1.2; filter: url(#shadow); }
-      .panel-soft { fill: #FFF3DE; stroke: #C8845A; stroke-width: 1.2; filter: url(#shadow); }
-      .panel-blue { fill: #EEF6FF; stroke: #4E83B6; stroke-width: 1.2; filter: url(#shadow); }
-      .panel-green { fill: #EEF8F2; stroke: #4B9B73; stroke-width: 1.2; filter: url(#shadow); }
-      .panel-purple { fill: #F2F0FF; stroke: #7E72D9; stroke-width: 1.2; filter: url(#shadow); }
-      .panel-red { fill: #FFF0EC; stroke: #D87957; stroke-width: 1.2; filter: url(#shadow); }
-      .title { font: 700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #2C2C2A; }
-      .subtitle { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #8B735C; }
-      .section { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #2C2C2A; }
-      .label { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #3E3329; }
-      .small { font: 400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #7B6652; }
-      .tiny { font: 400 11px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #806D59; }
-      .arrow { stroke: #8A7A66; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
-      .arrow-soft { stroke: #B89B79; stroke-width: 1.4; fill: none; marker-end: url(#arrow); stroke-dasharray: 5 5; }
+      .bg { fill: url(#pageBg); }
+      .title { font: 800 32px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #172033; }
+      .subtitle { font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #667085; }
+      .group-title { font: 800 18px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #1F2937; }
+      .box-title { font: 760 15px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #1E293B; }
+      .box-sub { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #667085; }
+      .tiny { font: 500 11px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #64748B; }
+      .note { font: 650 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif; fill: #7C4B2E; }
+      .panel { fill: #FFFFFF; stroke: #E2E8F0; stroke-width: 1.2; filter: url(#shadow); }
+      .frontend { fill: #EFF6FF; stroke: #60A5FA; }
+      .backend { fill: #F8FAFC; stroke: #CBD5E1; }
+      .rag { fill: #EEFDF5; stroke: #34D399; }
+      .tool { fill: #FFF7ED; stroke: #FDBA74; }
+      .ai { fill: #F5F3FF; stroke: #A78BFA; }
+      .mysql { fill: #EEF6FF; stroke: #3B82F6; }
+      .chroma { fill: #F0FDFA; stroke: #14B8A6; }
+      .log { fill: #FEFCE8; stroke: #EAB308; }
+      .chip { fill: #FFFFFF; stroke: #D8E0EA; stroke-width: 1; }
+      .chip-warm { fill: #FFF7ED; stroke: #FDBA74; stroke-width: 1; }
+      .arrow { stroke: #526071; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .arrow-warm { stroke: #A8663F; stroke-width: 1.9; fill: none; marker-end: url(#arrowWarm); }
+      .arrow-soft { stroke: #94A3B8; stroke-width: 1.5; fill: none; marker-end: url(#arrow); stroke-dasharray: 6 6; }
+      .band { fill: rgba(255,255,255,0.58); stroke: #E5E7EB; stroke-width: 1; }
     </style>
   </defs>
 
-  <rect class="bg" width="1120" height="760" rx="24"/>
+  <rect class="bg" x="0" y="0" width="1280" height="820" rx="28"/>
 
-  <text class="title" x="560" y="42" text-anchor="middle">人生决策伙伴 Agent 架构图</text>
-  <text class="subtitle" x="560" y="68" text-anchor="middle">越用越懂你：对话陪伴、档案沉淀、语义记忆与画像可视化</text>
+  <text class="title" x="640" y="46" text-anchor="middle">人生决策伙伴 Agent 架构图</text>
+  <text class="subtitle" x="640" y="74" text-anchor="middle">长期画像沉淀 · Memory RAG 召回 · Agent 工具编排 · 可治理记忆闭环</text>
 
-  <!-- User -->
-  <rect class="panel-soft" x="40" y="118" width="150" height="96" rx="14"/>
-  <text class="label" x="115" y="151" text-anchor="middle">用户</text>
-  <text class="small" x="115" y="174" text-anchor="middle">日常倾诉</text>
-  <text class="small" x="115" y="194" text-anchor="middle">重大决策</text>
+  <!-- Top flow -->
+  <rect class="panel" x="48" y="118" width="154" height="96" rx="16"/>
+  <text class="box-title" x="125" y="150" text-anchor="middle">用户</text>
+  <text class="box-sub" x="125" y="174" text-anchor="middle">人生选择</text>
+  <text class="box-sub" x="125" y="194" text-anchor="middle">倾诉 / 复盘 / 规划</text>
 
-  <!-- Frontend -->
-  <rect class="panel-blue" x="240" y="96" width="230" height="148" rx="14"/>
-  <text class="section" x="355" y="124" text-anchor="middle">前端 React + Vite</text>
-  <rect class="panel" x="266" y="142" width="178" height="26" rx="8"/>
-  <text class="tiny" x="355" y="160" text-anchor="middle">/onboarding 冷启动引导</text>
-  <rect class="panel" x="266" y="176" width="178" height="26" rx="8"/>
-  <text class="tiny" x="355" y="194" text-anchor="middle">/chat SSE 对话界面</text>
-  <rect class="panel" x="266" y="210" width="178" height="26" rx="8"/>
-  <text class="tiny" x="355" y="228" text-anchor="middle">/profile 用户画像页</text>
+  <rect class="panel frontend" x="250" y="104" width="210" height="124" rx="18"/>
+  <text class="box-title" x="355" y="136" text-anchor="middle">React 前端</text>
+  <rect class="chip" x="275" y="154" width="160" height="24" rx="8"/>
+  <text class="tiny" x="355" y="170" text-anchor="middle">登录 / 冷启动 / 对话</text>
+  <rect class="chip" x="275" y="184" width="160" height="24" rx="8"/>
+  <text class="tiny" x="355" y="200" text-anchor="middle">档案页 / 记忆罗盘</text>
 
-  <!-- API -->
-  <rect class="panel" x="520" y="128" width="120" height="84" rx="14"/>
-  <text class="label" x="580" y="158" text-anchor="middle">API</text>
-  <text class="small" x="580" y="181" text-anchor="middle">HTTP JSON</text>
-  <text class="small" x="580" y="199" text-anchor="middle">SSE Stream</text>
+  <rect class="panel backend" x="508" y="92" width="264" height="148" rx="18"/>
+  <text class="box-title" x="640" y="124" text-anchor="middle">Spring Boot API</text>
+  <rect class="chip" x="532" y="146" width="98" height="26" rx="8"/>
+  <text class="tiny" x="581" y="163" text-anchor="middle">Auth</text>
+  <rect class="chip" x="642" y="146" width="104" height="26" rx="8"/>
+  <text class="tiny" x="694" y="163" text-anchor="middle">Agent</text>
+  <rect class="chip" x="532" y="180" width="98" height="26" rx="8"/>
+  <text class="tiny" x="581" y="197" text-anchor="middle">Profile</text>
+  <rect class="chip" x="642" y="180" width="104" height="26" rx="8"/>
+  <text class="tiny" x="694" y="197" text-anchor="middle">Onboarding</text>
+  <text class="box-sub" x="640" y="225" text-anchor="middle">JWT 鉴权 · REST · SSE Stream</text>
 
-  <!-- Backend -->
-  <rect class="panel-purple" x="700" y="92" width="380" height="230" rx="16"/>
-  <text class="section" x="890" y="122" text-anchor="middle">后端 Spring Boot + Spring AI</text>
+  <rect class="panel ai" x="834" y="118" width="188" height="96" rx="18"/>
+  <text class="box-title" x="928" y="151" text-anchor="middle">DashScope</text>
+  <text class="box-sub" x="928" y="176" text-anchor="middle">Spring AI ChatClient</text>
+  <text class="box-sub" x="928" y="196" text-anchor="middle">qwen-plus</text>
 
-  <rect class="panel" x="724" y="142" width="100" height="44" rx="9"/>
-  <text class="tiny" x="774" y="161" text-anchor="middle">Agent</text>
-  <text class="tiny" x="774" y="176" text-anchor="middle">Controller</text>
+  <rect class="panel" x="1070" y="118" width="162" height="96" rx="18"/>
+  <text class="box-title" x="1151" y="151" text-anchor="middle">助手回复</text>
+  <text class="box-sub" x="1151" y="176" text-anchor="middle">决策分析</text>
+  <text class="box-sub" x="1151" y="196" text-anchor="middle">追问 / 建议</text>
 
-  <rect class="panel" x="838" y="142" width="100" height="44" rx="9"/>
-  <text class="tiny" x="888" y="161" text-anchor="middle">Onboarding</text>
-  <text class="tiny" x="888" y="176" text-anchor="middle">Controller</text>
+  <path class="arrow" d="M 202 166 L 250 166"/>
+  <path class="arrow" d="M 460 166 L 508 166"/>
+  <path class="arrow" d="M 772 166 L 834 166"/>
+  <path class="arrow" d="M 1022 166 L 1070 166"/>
 
-  <rect class="panel" x="952" y="142" width="100" height="44" rx="9"/>
-  <text class="tiny" x="1002" y="161" text-anchor="middle">Profile</text>
-  <text class="tiny" x="1002" y="176" text-anchor="middle">Controller</text>
+  <!-- Backend internals -->
+  <rect class="band" x="58" y="280" width="1164" height="226" rx="22"/>
+  <text class="group-title" x="90" y="316">后端核心编排</text>
 
-  <rect class="panel" x="724" y="205" width="150" height="44" rx="9"/>
-  <text class="tiny" x="799" y="224" text-anchor="middle">DecisionAgentService</text>
-  <text class="tiny" x="799" y="239" text-anchor="middle">ChatClient 编排</text>
+  <rect class="panel backend" x="92" y="342" width="210" height="96" rx="16"/>
+  <text class="box-title" x="197" y="374" text-anchor="middle">DecisionAgentService</text>
+  <text class="box-sub" x="197" y="398" text-anchor="middle">保存消息 · 调用模型</text>
+  <text class="box-sub" x="197" y="418" text-anchor="middle">编排工具与异步提炼</text>
 
-  <rect class="panel" x="902" y="205" width="150" height="44" rx="9"/>
-  <text class="tiny" x="977" y="224" text-anchor="middle">ProfileExtractService</text>
-  <text class="tiny" x="977" y="239" text-anchor="middle">异步提炼档案</text>
+  <rect class="panel rag" x="352" y="326" width="264" height="128" rx="18"/>
+  <text class="box-title" x="484" y="358" text-anchor="middle">Memory RAG</text>
+  <rect class="chip" x="378" y="378" width="212" height="24" rx="8"/>
+  <text class="tiny" x="484" y="394" text-anchor="middle">ProfileAdvisor 注入 prompt</text>
+  <rect class="chip" x="378" y="408" width="212" height="24" rx="8"/>
+  <text class="tiny" x="484" y="424" text-anchor="middle">MemoryRetrievalService 混合召回</text>
 
-  <rect class="panel" x="724" y="264" width="150" height="34" rx="9"/>
-  <text class="tiny" x="799" y="286" text-anchor="middle">ProfileAdvisor 档案召回</text>
+  <rect class="panel rag" x="352" y="462" width="264" height="30" rx="12"/>
+  <text class="note" x="484" y="482" text-anchor="middle">intent · query rewrite · candidateTopK · rerankReason</text>
 
-  <rect class="panel" x="902" y="264" width="150" height="34" rx="9"/>
-  <text class="tiny" x="977" y="286" text-anchor="middle">UserService 会话用户</text>
+  <rect class="panel tool" x="672" y="326" width="230" height="128" rx="18"/>
+  <text class="box-title" x="787" y="358" text-anchor="middle">Agent Tools</text>
+  <rect class="chip-warm" x="696" y="378" width="182" height="24" rx="8"/>
+  <text class="tiny" x="787" y="394" text-anchor="middle">searchDecisionHistory</text>
+  <rect class="chip-warm" x="696" y="408" width="182" height="24" rx="8"/>
+  <text class="tiny" x="787" y="424" text-anchor="middle">searchSemanticMemory</text>
+  <rect class="chip-warm" x="696" y="438" width="182" height="24" rx="8"/>
+  <text class="tiny" x="787" y="454" text-anchor="middle">matrix / updateProfile</text>
 
-  <!-- External AI -->
-  <rect class="panel-red" x="700" y="338" width="240" height="70" rx="14"/>
-  <text class="label" x="820" y="366" text-anchor="middle">DashScope 通义千问</text>
-  <text class="small" x="820" y="389" text-anchor="middle">默认模型：qwen-plus</text>
+  <rect class="panel backend" x="956" y="342" width="220" height="96" rx="16"/>
+  <text class="box-title" x="1066" y="374" text-anchor="middle">ProfileExtractService</text>
+  <text class="box-sub" x="1066" y="398" text-anchor="middle">对话后异步画像提炼</text>
+  <text class="box-sub" x="1066" y="418" text-anchor="middle">高/中/低置信度路由</text>
+
+  <path class="arrow" d="M 302 390 L 352 390"/>
+  <path class="arrow" d="M 616 390 L 672 390"/>
+  <path class="arrow-soft" d="M 902 390 L 956 390"/>
+  <path class="arrow-warm" d="M 1066 438 C 1066 520 1008 542 934 542"/>
 
   <!-- Storage -->
-  <text class="section" x="560" y="388" text-anchor="middle">存储层</text>
-  <rect class="panel-green" x="120" y="420" width="230" height="104" rx="14"/>
-  <text class="label" x="235" y="455" text-anchor="middle">MySQL companion</text>
-  <text class="small" x="235" y="480" text-anchor="middle">用户表 + 五类结构化档案</text>
-  <text class="small" x="235" y="500" text-anchor="middle">MyBatis-Plus 读写</text>
+  <rect class="band" x="58" y="548" width="1164" height="196" rx="22"/>
+  <text class="group-title" x="90" y="584">记忆与观测存储</text>
 
-  <rect class="panel-green" x="440" y="420" width="230" height="104" rx="14"/>
-  <text class="label" x="555" y="455" text-anchor="middle">Chroma Vector Store</text>
-  <text class="small" x="555" y="480" text-anchor="middle">conversation_analysis</text>
-  <text class="small" x="555" y="500" text-anchor="middle">向量化 · 检索 · 召回</text>
+  <rect class="panel mysql" x="92" y="614" width="280" height="92" rx="18"/>
+  <text class="box-title" x="232" y="644" text-anchor="middle">MySQL</text>
+  <text class="box-sub" x="232" y="668" text-anchor="middle">用户 / 会话 / 五类画像</text>
+  <text class="box-sub" x="232" y="688" text-anchor="middle">候选记忆 / 治理审计 / 关联表</text>
 
-  <rect class="panel-green" x="760" y="420" width="230" height="104" rx="14"/>
-  <text class="label" x="875" y="455" text-anchor="middle">InMemory ChatMemory</text>
-  <text class="small" x="875" y="480" text-anchor="middle">按 sessionId 隔离会话</text>
-  <text class="small" x="875" y="500" text-anchor="middle">最近 100 条消息窗口</text>
+  <rect class="panel chroma" x="430" y="614" width="260" height="92" rx="18"/>
+  <text class="box-title" x="560" y="644" text-anchor="middle">Chroma Vector Store</text>
+  <text class="box-sub" x="560" y="668" text-anchor="middle">typed memory chunk</text>
+  <text class="box-sub" x="560" y="688" text-anchor="middle">userId 隔离 · memoryType · scene evidence</text>
 
-  <!-- Profiles -->
-  <text class="section" x="560" y="585" text-anchor="middle">五类用户档案</text>
-  <rect class="panel-soft" x="70" y="618" width="160" height="68" rx="12"/>
-  <text class="label" x="150" y="646" text-anchor="middle">价值观</text>
-  <text class="tiny" x="150" y="666" text-anchor="middle">被动提炼 · 全量召回</text>
+  <rect class="panel log" x="746" y="614" width="220" height="92" rx="18"/>
+  <text class="box-title" x="856" y="644" text-anchor="middle">观测日志</text>
+  <text class="box-sub" x="856" y="668" text-anchor="middle">memory_retrieval_log</text>
+  <text class="box-sub" x="856" y="688" text-anchor="middle">agent_tool_call_log</text>
 
-  <rect class="panel-green" x="270" y="618" width="160" height="68" rx="12"/>
-  <text class="label" x="350" y="646" text-anchor="middle">决策历史</text>
-  <text class="tiny" x="350" y="666" text-anchor="middle">主动追问 · 语义召回</text>
+  <rect class="panel tool" x="1022" y="614" width="154" height="92" rx="18"/>
+  <text class="box-title" x="1099" y="644" text-anchor="middle">待确认区</text>
+  <text class="box-sub" x="1099" y="668" text-anchor="middle">confirm / reject</text>
+  <text class="box-sub" x="1099" y="688" text-anchor="middle">correct / delete</text>
 
-  <rect class="panel-purple" x="470" y="618" width="160" height="68" rx="12"/>
-  <text class="label" x="550" y="646" text-anchor="middle">情绪模式</text>
-  <text class="tiny" x="550" y="666" text-anchor="middle">识别情境 · 指导语气</text>
+  <path class="arrow" d="M 430 454 C 330 506 270 540 232 614"/>
+  <path class="arrow" d="M 484 492 C 500 538 530 574 560 614"/>
+  <path class="arrow-soft" d="M 787 454 C 804 524 830 570 856 614"/>
+  <path class="arrow-warm" d="M 1038 438 C 1030 520 1080 560 1099 614"/>
+  <path class="arrow-warm" d="M 1066 438 C 910 530 640 562 560 614"/>
+  <path class="arrow-warm" d="M 1066 438 C 820 535 356 562 232 614"/>
 
-  <rect class="panel-red" x="670" y="618" width="160" height="68" rx="12"/>
-  <text class="label" x="750" y="646" text-anchor="middle">关系图谱</text>
-  <text class="tiny" x="750" y="666" text-anchor="middle">重要他人 · 影响方式</text>
+  <!-- Retrieval arrows back to RAG -->
+  <path class="arrow-soft" d="M 232 614 C 222 548 285 488 352 430"/>
+  <path class="arrow-soft" d="M 560 614 C 560 552 530 504 508 454"/>
 
-  <rect class="panel" x="870" y="618" width="180" height="68" rx="12"/>
-  <text class="label" x="960" y="646" text-anchor="middle">恐惧与边界</text>
-  <text class="tiny" x="960" y="666" text-anchor="middle">高置信写入 · 红线识别</text>
-
-  <!-- Arrows -->
-  <path class="arrow" d="M 190 166 L 236 166"/>
-  <path class="arrow" d="M 470 170 L 516 170"/>
-  <path class="arrow" d="M 640 170 L 696 170"/>
-
-  <path class="arrow" d="M 800 249 L 800 334"/>
-  <path class="arrow-soft" d="M 890 322 C 890 340, 820 326, 820 334"/>
-
-  <path class="arrow-soft" d="M 976 249 C 976 345, 292 345, 292 416"/>
-  <path class="arrow-soft" d="M 976 249 C 976 352, 555 350, 555 416"/>
-  <path class="arrow-soft" d="M 799 249 C 799 342, 875 350, 875 416"/>
-  <path class="arrow-soft" d="M 799 298 C 725 355, 555 360, 555 416"/>
-  <path class="arrow-soft" d="M 799 298 C 620 365, 235 370, 235 416"/>
-
-  <path class="arrow" d="M 235 524 C 235 575, 150 575, 150 614"/>
-  <path class="arrow" d="M 235 524 C 235 574, 350 574, 350 614"/>
-  <path class="arrow" d="M 235 524 C 235 574, 550 574, 550 614"/>
-  <path class="arrow" d="M 235 524 C 235 574, 750 574, 750 614"/>
-  <path class="arrow" d="M 235 524 C 235 574, 960 574, 960 614"/>
-
-  <!-- Flow labels -->
-  <text class="tiny" x="215" y="153" text-anchor="middle">使用</text>
-  <text class="tiny" x="495" y="156" text-anchor="middle">请求</text>
-  <text class="tiny" x="670" y="156" text-anchor="middle">路由</text>
-  <text class="tiny" x="858" y="330" text-anchor="middle">模型调用</text>
-  <text class="tiny" x="435" y="353" text-anchor="middle">档案写入 / 语义记忆</text>
+  <!-- Legend -->
+  <rect class="panel" x="360" y="764" width="560" height="34" rx="14"/>
+  <text class="tiny" x="640" y="785" text-anchor="middle">实线：主调用链路 · 虚线：召回/观测 · 暖色箭头：画像沉淀与记忆写入闭环</text>
 </svg>
