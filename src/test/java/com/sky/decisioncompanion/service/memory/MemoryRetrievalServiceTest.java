@@ -22,6 +22,7 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -74,7 +75,7 @@ class MemoryRetrievalServiceTest {
         when(relationshipRepository.selectList(any())).thenReturn(List.of(
                 relationship("妈妈", "母亲", "高", "从安全和稳定角度影响选择", "希望用户不要离家太远")));
         when(fearRepository.selectList(any())).thenReturn(List.of(fear("fear", "害怕离家太远", "0.80")));
-        when(decisionRecallService.recall(USER_ID, "我在纠结外地 offer", 3))
+        when(decisionRecallService.recall(USER_ID, "我在纠结外地 offer", 4))
                 .thenReturn(decisionResult(decision("外地 offer", "暂缓接受", "担心家庭距离")));
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
                 Document.builder()
@@ -110,8 +111,9 @@ class MemoryRetrievalServiceTest {
         ArgumentCaptor<SearchRequest> captor = ArgumentCaptor.forClass(SearchRequest.class);
         verify(vectorStore).similaritySearch(captor.capture());
         SearchRequest request = captor.getValue();
-        assertThat(request.getQuery()).isEqualTo("我在纠结外地 offer");
-        assertThat(request.getTopK()).isEqualTo(5);
+        assertThat(request.getQuery()).contains("重大决策");
+        assertThat(request.getQuery()).contains("我在纠结外地 offer");
+        assertThat(request.getTopK()).isEqualTo(10);
         assertThat(request.getSimilarityThreshold()).isEqualTo(0.3);
         assertThat(request.getFilterExpression().toString()).contains("userId");
         assertThat(request.getFilterExpression().toString()).contains("1");
@@ -192,6 +194,92 @@ class MemoryRetrievalServiceTest {
     }
 
     @Test
+    void retrievePrioritizesDecisionMemoriesForChoiceIntent() {
+        String query = "我在纠结要不要去外地高薪 offer";
+        when(valuesRepository.selectList(any())).thenReturn(List.of(value("城市偏好", "更看重离家近", "0.90")));
+        when(emotionRepository.selectList(any())).thenReturn(List.of(emotion("焦虑", "做重大选择前容易反复想")));
+        when(relationshipRepository.selectList(any())).thenReturn(List.of(
+                relationship("妈妈", "母亲", "高", "从安全和稳定角度影响选择", "")));
+        when(fearRepository.selectList(any())).thenReturn(List.of(fear("fear", "害怕离家太远", "0.80")));
+        when(decisionRecallService.recall(USER_ID, query, 4)).thenReturn(decisionResult(
+                decision("外地 offer", "暂缓接受", "担心家庭距离"),
+                decision("留本地", "接受", "离父母更近")));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        MemoryContext context = service.retrieve(USER_ID, query);
+
+        assertThat(context.promptContext().indexOf("【相似历史决策】"))
+                .isLessThan(context.promptContext().indexOf("【情绪模式】"));
+        verify(decisionRecallService).recall(USER_ID, query, 4);
+    }
+
+    @Test
+    void retrieveRewritesSemanticQueryForMajorDecisionIntent() {
+        String query = "我在纠结要不要接受外地 offer";
+        when(valuesRepository.selectList(any())).thenReturn(List.of(value("城市偏好", "更看重离家近", "0.90")));
+        when(emotionRepository.selectList(any())).thenReturn(List.of());
+        when(relationshipRepository.selectList(any())).thenReturn(List.of());
+        when(fearRepository.selectList(any())).thenReturn(List.of());
+        when(decisionRecallService.recall(USER_ID, query, 4)).thenReturn(decisionResult());
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        service.retrieve(USER_ID, query);
+
+        ArgumentCaptor<SearchRequest> captor = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(vectorStore).similaritySearch(captor.capture());
+        SearchRequest request = captor.getValue();
+        assertThat(request.getQuery()).isNotEqualTo(query);
+        assertThat(request.getQuery()).contains("重大决策");
+        assertThat(request.getQuery()).contains("价值观");
+        assertThat(request.getQuery()).contains("恐惧边界");
+        assertThat(request.getTopK()).isGreaterThan(5);
+    }
+
+    @Test
+    void searchSemanticMemoriesReranksByIntentTypeAndProfileLinkBeforeReturningTopK() {
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                semanticDocument("doc-emotion", "高向量分情绪片段", "emotion", 0.95, 0.95, 1),
+                semanticDocument("doc-value", "价值观片段", "value", 0.78, 0.70, 120),
+                semanticDocument("doc-fear", "恐惧边界片段", "fear", 0.80, 0.70, 2),
+                semanticDocument("doc-relationship", "关系影响片段", "relationship", 0.76, 0.80, 1)));
+        when(sceneMemoryLinkRepository.selectOne(any())).thenReturn(
+                null,
+                null,
+                null,
+                sceneMemoryLink(true, "active"));
+
+        MemoryRetrievalService.SemanticSearchResult result =
+                service.searchSemanticMemories(USER_ID, "我要不要接受外地 offer", 3);
+
+        assertThat(result.memories()).extracting(MemoryContext.SemanticMemory::content)
+                .containsExactly("关系影响片段", "恐惧边界片段", "价值观片段");
+        assertThat(result.memories()).extracting(MemoryContext.SemanticMemory::type)
+                .containsExactly("relationship", "fear", "value");
+        assertThat(result.maxScore()).isEqualTo(0.95);
+    }
+
+    @Test
+    void retrievePrioritizesEmotionAndFearForEmotionSupportIntent() {
+        String query = "我最近压力很大很焦虑，有点撑不住";
+        when(valuesRepository.selectList(any())).thenReturn(List.of(value("稳定性", "偏好长期确定性", "0.85")));
+        when(emotionRepository.selectList(any())).thenReturn(List.of(
+                emotion("焦虑", "压力大时容易陷入反复内耗"),
+                emotion("低落", "被否定后会先自我怀疑")));
+        when(relationshipRepository.selectList(any())).thenReturn(List.of());
+        when(fearRepository.selectList(any())).thenReturn(List.of(fear("fear", "害怕失控和被催促", "0.80")));
+        when(decisionRecallService.recall(USER_ID, query, 1)).thenReturn(decisionResult());
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        MemoryContext context = service.retrieve(USER_ID, query);
+
+        assertThat(context.promptContext().indexOf("【情绪模式】"))
+                .isLessThan(context.promptContext().indexOf("【稳定价值观】"));
+        assertThat(context.promptContext().indexOf("【恐惧与边界】"))
+                .isLessThan(context.promptContext().indexOf("【相似历史决策】"));
+        verify(decisionRecallService).recall(USER_ID, query, 1);
+    }
+
+    @Test
     void retrieveBoundsPromptItemsAndTruncatesLongContent() {
         when(valuesRepository.selectList(any())).thenReturn(List.of(
                 value("v1", "p1", "0.9"),
@@ -242,7 +330,7 @@ class MemoryRetrievalServiceTest {
         assertThat(context.semanticMemories().get(0).content()).hasSize(20);
         ArgumentCaptor<SearchRequest> captor = ArgumentCaptor.forClass(SearchRequest.class);
         verify(vectorStore).similaritySearch(captor.capture());
-        assertThat(captor.getValue().getTopK()).isEqualTo(4);
+        assertThat(captor.getValue().getTopK()).isEqualTo(8);
         assertThat(captor.getValue().getSimilarityThreshold()).isEqualTo(0.72);
         verify(decisionRecallService).recall(eq(USER_ID), eq("query"), eq(3));
     }
@@ -276,7 +364,8 @@ class MemoryRetrievalServiceTest {
                 vectorStore,
                 properties,
                 decisionRecallService,
-                retrievalLogService);
+                retrievalLogService,
+                new MemoryRetrievalIntentService(properties));
     }
 
     private ProfileValues value(String item, String preference, String confidence) {
@@ -347,5 +436,24 @@ class MemoryRetrievalServiceTest {
         link.setActive(active);
         link.setDeleteStatus(deleteStatus);
         return link;
+    }
+
+    private Document semanticDocument(
+            String id,
+            String text,
+            String memoryType,
+            double vectorScore,
+            double confidence,
+            int ageDays) {
+        return Document.builder()
+                .id(id)
+                .text(text)
+                .metadata("type", "conversation_scene")
+                .metadata("memoryType", memoryType)
+                .metadata("profileRecordCount", 1)
+                .metadata("confidence", confidence)
+                .metadata("createdAt", LocalDateTime.now().minusDays(ageDays).toString())
+                .score(vectorScore)
+                .build();
     }
 }

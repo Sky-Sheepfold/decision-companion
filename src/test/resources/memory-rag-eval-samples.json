@@ -1,10 +1,11 @@
 {
-  "version": "p0",
-  "description": "Memory RAG P0 recall guardrail samples for manual/offline evaluation.",
+  "version": "p1",
+  "description": "Memory RAG recall guardrail and intent-routing samples for manual/offline evaluation.",
   "samples": [
     {
       "id": "user-isolation",
       "query": "我在纠结要不要接受外地 offer",
+      "expectedIntent": "major_decision",
       "expectedSignals": [
         "召回请求必须携带当前 userId",
         "Chroma filterExpression 只允许命中当前用户的场景记忆",
@@ -15,6 +16,7 @@
     {
       "id": "active-scene-filter",
       "query": "我最近又在考虑离家远近的问题",
+      "expectedIntent": "general",
       "expectedSignals": [
         "active=true 且 deleteStatus=active 的场景记忆可以进入结果",
         "已删除或删除失败的场景记忆不能注入 Prompt",
@@ -25,6 +27,7 @@
     {
       "id": "similarity-threshold",
       "query": "毕业后应该去大城市还是留在本地",
+      "expectedIntent": "major_decision",
       "expectedSignals": [
         "SearchRequest 使用配置的 semanticSimilarityThreshold",
         "低相似度语义记忆不应计入 semanticHitCount",
@@ -35,6 +38,7 @@
     {
       "id": "semantic-scene-hit",
       "query": "我是不是一直很在意父母的意见",
+      "expectedIntent": "relationship_pressure",
       "expectedSignals": [
         "相似场景记忆作为证据摘要补充结构化画像",
         "Prompt 使用相关场景记忆区块而不是画像结论区块承载语义命中",
@@ -45,12 +49,24 @@
     {
       "id": "vector-degradation",
       "query": "我想复盘最近几次工作选择",
+      "expectedIntent": "review",
       "expectedSignals": [
         "VectorStore 缺失或异常时仍返回结构化画像与历史决策",
         "metrics.vectorAvailable=false 或 degraded=true",
         "主对话链路不因 Chroma 或日志写入失败而中断"
       ],
       "guardrail": "向量召回是增强项，不是聊天主流程的单点依赖。"
+    },
+    {
+      "id": "goal-planning-intent",
+      "query": "我想规划未来三年的职业目标和成长路径",
+      "expectedIntent": "goal_planning",
+      "expectedSignals": [
+        "目标规划场景优先召回价值观、历史选择和恐惧边界",
+        "语义检索 query 应加入目标规划语义，而不是只使用原始用户问题",
+        "Prompt 中稳定价值观应排在较前位置"
+      ],
+      "guardrail": "目标规划不能退化成通用聊天召回。"
     }
   ]
 }

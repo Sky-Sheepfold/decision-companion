@@ -23,7 +23,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
@@ -41,6 +45,7 @@ public class MemoryRetrievalService {
     private final MemoryRetrievalProperties properties;
     private final DecisionRecallService decisionRecallService;
     private final MemoryRetrievalLogService retrievalLogService;
+    private final MemoryRetrievalIntentService intentService;
 
     public MemoryRetrievalService(
             ProfileValuesRepository valuesRepository,
@@ -51,7 +56,8 @@ public class MemoryRetrievalService {
             @Autowired(required = false) @Nullable VectorStore vectorStore,
             MemoryRetrievalProperties properties,
             DecisionRecallService decisionRecallService,
-            MemoryRetrievalLogService retrievalLogService) {
+            MemoryRetrievalLogService retrievalLogService,
+            MemoryRetrievalIntentService intentService) {
         this.valuesRepository = valuesRepository;
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
@@ -61,6 +67,7 @@ public class MemoryRetrievalService {
         this.properties = properties;
         this.decisionRecallService = decisionRecallService;
         this.retrievalLogService = retrievalLogService;
+        this.intentService = intentService;
     }
 
     public MemoryContext retrieve(Long userId, String query) {
@@ -74,19 +81,20 @@ public class MemoryRetrievalService {
         List<MemoryContext.RelationshipMemory> relationships = new ArrayList<>();
         List<MemoryContext.ProfileMemory> fears = new ArrayList<>();
         boolean degraded = false;
+        MemoryRetrievalPlan plan = intentService.plan(query);
 
         try {
-            values = getValues(userId);
-            emotions = getEmotions(userId);
-            decisions = getDecisions(userId, query);
-            relationships = getRelationships(userId);
-            fears = getFears(userId);
+            values = getValues(userId, plan.valuesLimit());
+            emotions = getEmotions(userId, plan.emotionsLimit());
+            decisions = getDecisions(userId, query, plan.decisionsLimit());
+            relationships = getRelationships(userId, plan.relationshipsLimit());
+            fears = getFears(userId, plan.fearsLimit());
         } catch (Exception e) {
             degraded = true;
             logger.warn("长期记忆结构化画像召回失败, userId: {}", userId, e);
         }
 
-        SemanticSearchResult semanticResult = searchSemanticMemories(userId, query, properties.semanticTopK());
+        SemanticSearchResult semanticResult = searchSemanticMemories(userId, query, plan, plan.semanticTopK());
         degraded = degraded || semanticResult.degraded();
 
         String promptContext = buildPromptContext(
@@ -95,7 +103,8 @@ public class MemoryRetrievalService {
                 decisions,
                 relationships,
                 fears,
-                semanticResult.memories());
+                semanticResult.memories(),
+                plan);
         MemoryContext.RetrievalMetrics metrics = new MemoryContext.RetrievalMetrics(
                 values.size(),
                 emotions.size(),
@@ -107,10 +116,10 @@ public class MemoryRetrievalService {
                 semanticResult.vectorAvailable(),
                 degraded);
 
-        logger.info("Memory RAG 召回完成, userId: {}, valueCount: {}, emotionCount: {}, decisionCount: {}, "
+        logger.info("Memory RAG 召回完成, userId: {}, intent: {}, valueCount: {}, emotionCount: {}, decisionCount: {}, "
                 + "relationshipCount: {}, fearCount: {}, semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
-                userId, values.size(), emotions.size(), decisions.size(), relationships.size(), fears.size(),
-                semanticResult.memories().size(), semanticResult.maxScore(), degraded);
+                userId, plan.intent().code(), values.size(), emotions.size(), decisions.size(), relationships.size(),
+                fears.size(), semanticResult.memories().size(), semanticResult.maxScore(), degraded);
 
         MemoryContext context = new MemoryContext(
                 values,
@@ -121,11 +130,20 @@ public class MemoryRetrievalService {
                 semanticResult.memories(),
                 metrics,
                 promptContext);
-        recordAutoRecall(userId, query, context);
+        recordAutoRecall(userId, query, context, plan);
         return context;
     }
 
     public SemanticSearchResult searchSemanticMemories(Long userId, String query, Integer topK) {
+        MemoryRetrievalPlan plan = intentService.plan(query);
+        return searchSemanticMemories(userId, query, plan, properties.normalizeSemanticTopK(topK));
+    }
+
+    private SemanticSearchResult searchSemanticMemories(
+            Long userId,
+            String query,
+            MemoryRetrievalPlan plan,
+            int resultTopK) {
         if (userId == null || !StringUtils.hasText(query)) {
             return new SemanticSearchResult(List.of(), null, vectorStore != null, false);
         }
@@ -133,28 +151,33 @@ public class MemoryRetrievalService {
             return new SemanticSearchResult(List.of(), null, false, true);
         }
 
-        int safeTopK = properties.normalizeSemanticTopK(topK);
+        int safeResultTopK = Math.max(1, resultTopK);
+        int candidateTopK = Math.max(safeResultTopK, plan.semanticCandidateTopK());
         try {
             SearchRequest searchRequest = SearchRequest.builder()
-                    .query(query)
-                    .topK(safeTopK)
+                    .query(StringUtils.hasText(plan.semanticQuery()) ? plan.semanticQuery() : query)
+                    .topK(candidateTopK)
                     .similarityThreshold(properties.semanticSimilarityThreshold())
                     .filterExpression("userId == '" + userId + "'")
                     .build();
 
-            List<MemoryContext.SemanticMemory> memories = vectorStore.similaritySearch(searchRequest)
-                    .stream()
-                    .filter(Objects::nonNull)
-                    .filter(this::isActiveSceneMemory)
-                    .limit(safeTopK)
-                    .map(this::toSemanticMemory)
-                    .filter(memory -> StringUtils.hasText(memory.content()))
-                    .toList();
-            Double maxScore = memories.stream()
-                    .map(MemoryContext.SemanticMemory::score)
+            List<SemanticCandidate> candidates = semanticCandidates(vectorStore.similaritySearch(searchRequest), plan);
+            Double maxScore = candidates.stream()
+                    .map(candidate -> candidate.document().getScore())
                     .filter(Objects::nonNull)
                     .max(Double::compareTo)
                     .orElse(null);
+            List<MemoryContext.SemanticMemory> memories = chooseRerankPool(candidates, plan, safeResultTopK)
+                    .stream()
+                    .sorted(Comparator
+                            .comparingDouble(SemanticCandidate::rerankScore)
+                            .reversed()
+                            .thenComparingInt(SemanticCandidate::originalIndex))
+                    .limit(safeResultTopK)
+                    .map(SemanticCandidate::document)
+                    .map(this::toSemanticMemory)
+                    .filter(memory -> StringUtils.hasText(memory.content()))
+                    .toList();
             return new SemanticSearchResult(memories, maxScore, true, false);
         } catch (Exception e) {
             logger.warn("长期语义记忆召回失败, userId: {}", userId, e);
@@ -162,17 +185,49 @@ public class MemoryRetrievalService {
         }
     }
 
-    private List<MemoryContext.ProfileMemory> getValues(Long userId) {
+    private List<SemanticCandidate> semanticCandidates(List<Document> documents, MemoryRetrievalPlan plan) {
+        if (documents == null || documents.isEmpty()) {
+            return List.of();
+        }
+        List<SemanticCandidate> candidates = new ArrayList<>();
+        for (int i = 0; i < documents.size(); i++) {
+            Document document = documents.get(i);
+            if (document == null) {
+                continue;
+            }
+            ProfileSceneMemoryLink link = findSceneMemoryLink(document);
+            if (!isActiveSceneMemory(link)) {
+                continue;
+            }
+            candidates.add(new SemanticCandidate(document, link, i, rerankScore(document, link, plan)));
+        }
+        return candidates;
+    }
+
+    private List<SemanticCandidate> chooseRerankPool(
+            List<SemanticCandidate> candidates,
+            MemoryRetrievalPlan plan,
+            int resultTopK) {
+        if (plan.preferredMemoryTypes().isEmpty()) {
+            return candidates;
+        }
+        List<SemanticCandidate> preferred = candidates.stream()
+                .filter(candidate -> isPreferredMemoryType(candidate.document(), plan))
+                .toList();
+        return preferred.size() >= resultTopK ? preferred : candidates;
+    }
+
+    private List<MemoryContext.ProfileMemory> getValues(Long userId, int limit) {
         return valuesRepository.selectList(new LambdaQueryWrapper<ProfileValues>()
                 .eq(ProfileValues::getUserId, userId)
                 .eq(ProfileValues::getActive, true)
                 .orderByDesc(ProfileValues::getConfidence)
                 .orderByDesc(ProfileValues::getUpdatedAt)
-                .last("LIMIT " + properties.sectionLimit()))
+                .last("LIMIT " + limit))
                 .stream()
                 .filter(value -> Objects.equals(userId, value.getUserId()))
                 .filter(value -> Boolean.TRUE.equals(value.getActive()))
-                .limit(properties.sectionLimit())
+                .limit(limit)
                 .map(value -> new MemoryContext.ProfileMemory(
                         clean(value.getItem()),
                         truncate(value.getPreference()),
@@ -182,16 +237,16 @@ public class MemoryRetrievalService {
                 .toList();
     }
 
-    private List<MemoryContext.ProfileMemory> getEmotions(Long userId) {
+    private List<MemoryContext.ProfileMemory> getEmotions(Long userId, int limit) {
         return emotionRepository.selectList(new LambdaQueryWrapper<ProfileEmotion>()
                 .eq(ProfileEmotion::getUserId, userId)
                 .eq(ProfileEmotion::getActive, true)
                 .orderByDesc(ProfileEmotion::getUpdatedAt)
-                .last("LIMIT " + properties.sectionLimit()))
+                .last("LIMIT " + limit))
                 .stream()
                 .filter(emotion -> Objects.equals(userId, emotion.getUserId()))
                 .filter(emotion -> Boolean.TRUE.equals(emotion.getActive()))
-                .limit(properties.sectionLimit())
+                .limit(limit)
                 .map(emotion -> new MemoryContext.ProfileMemory(
                         clean(emotion.getEmotion()),
                         truncate(emotion.getBehavior()),
@@ -201,8 +256,8 @@ public class MemoryRetrievalService {
                 .toList();
     }
 
-    private List<MemoryContext.DecisionMemory> getDecisions(Long userId, String query) {
-        return decisionRecallService.recall(userId, query, properties.decision().defaultLimit())
+    private List<MemoryContext.DecisionMemory> getDecisions(Long userId, String query, int limit) {
+        return decisionRecallService.recall(userId, query, limit)
                 .items()
                 .stream()
                 .map(this::toDecisionMemory)
@@ -218,16 +273,16 @@ public class MemoryRetrievalService {
                 decision.satisfaction());
     }
 
-    private List<MemoryContext.RelationshipMemory> getRelationships(Long userId) {
+    private List<MemoryContext.RelationshipMemory> getRelationships(Long userId, int limit) {
         return relationshipRepository.selectList(new LambdaQueryWrapper<ProfileRelationship>()
                 .eq(ProfileRelationship::getUserId, userId)
                 .eq(ProfileRelationship::getActive, true)
                 .orderByDesc(ProfileRelationship::getUpdatedAt)
-                .last("LIMIT " + properties.sectionLimit()))
+                .last("LIMIT " + limit))
                 .stream()
                 .filter(relationship -> Objects.equals(userId, relationship.getUserId()))
                 .filter(relationship -> Boolean.TRUE.equals(relationship.getActive()))
-                .limit(properties.sectionLimit())
+                .limit(limit)
                 .map(relationship -> new MemoryContext.RelationshipMemory(
                         clean(relationship.getName()),
                         truncate(relationship.getRole()),
@@ -240,17 +295,17 @@ public class MemoryRetrievalService {
                 .toList();
     }
 
-    private List<MemoryContext.ProfileMemory> getFears(Long userId) {
+    private List<MemoryContext.ProfileMemory> getFears(Long userId, int limit) {
         return fearRepository.selectList(new LambdaQueryWrapper<ProfileFear>()
                 .eq(ProfileFear::getUserId, userId)
                 .eq(ProfileFear::getActive, true)
                 .orderByDesc(ProfileFear::getConfidence)
                 .orderByDesc(ProfileFear::getUpdatedAt)
-                .last("LIMIT " + properties.sectionLimit()))
+                .last("LIMIT " + limit))
                 .stream()
                 .filter(fear -> Objects.equals(userId, fear.getUserId()))
                 .filter(fear -> Boolean.TRUE.equals(fear.getActive()))
-                .limit(properties.sectionLimit())
+                .limit(limit)
                 .map(fear -> new MemoryContext.ProfileMemory(
                         clean(fear.getType()),
                         truncate(fear.getDescription()),
@@ -265,26 +320,96 @@ public class MemoryRetrievalService {
         if (!StringUtils.hasText(content)) {
             content = document.getFormattedContent();
         }
-        Object type = document.getMetadata().getOrDefault("type", "memory");
         Object recordCount = document.getMetadata().get("profileRecordCount");
         return new MemoryContext.SemanticMemory(
                 truncate(content),
-                type == null ? "memory" : type.toString(),
+                StringUtils.hasText(memoryType(document)) ? memoryType(document) : "memory",
                 toInteger(recordCount),
                 document.getScore());
     }
 
     private boolean isActiveSceneMemory(Document document) {
-        if (!StringUtils.hasText(document.getId())) {
-            return true;
+        return isActiveSceneMemory(findSceneMemoryLink(document));
+    }
+
+    private ProfileSceneMemoryLink findSceneMemoryLink(Document document) {
+        if (document == null || !StringUtils.hasText(document.getId())) {
+            return null;
         }
-        ProfileSceneMemoryLink link = sceneMemoryLinkRepository
+        return sceneMemoryLinkRepository
                 .selectOne(new LambdaQueryWrapper<ProfileSceneMemoryLink>()
                         .eq(ProfileSceneMemoryLink::getDocumentId, document.getId()));
+    }
+
+    private boolean isActiveSceneMemory(@Nullable ProfileSceneMemoryLink link) {
         if (link == null) {
             return true;
         }
         return Boolean.TRUE.equals(link.getActive()) && "active".equals(link.getDeleteStatus());
+    }
+
+    private double rerankScore(Document document, @Nullable ProfileSceneMemoryLink link, MemoryRetrievalPlan plan) {
+        double score = document.getScore() == null ? 0.0 : document.getScore();
+        score += memoryTypeBoost(memoryType(document), plan);
+        score += confidenceBoost(document.getMetadata().get("confidence"));
+        score += recencyBoost(document.getMetadata().get("createdAt"));
+        if (link != null && Boolean.TRUE.equals(link.getActive()) && "active".equals(link.getDeleteStatus())) {
+            score += 0.08;
+        }
+        return score;
+    }
+
+    private double memoryTypeBoost(String memoryType, MemoryRetrievalPlan plan) {
+        if (!StringUtils.hasText(memoryType) || plan.preferredMemoryTypes().isEmpty()) {
+            return 0.0;
+        }
+        if (plan.preferredMemoryTypes().contains(memoryType)) {
+            return 0.25;
+        }
+        if ("mixed".equals(memoryType)) {
+            return 0.06;
+        }
+        return 0.0;
+    }
+
+    private double confidenceBoost(Object confidence) {
+        Double value = toDouble(confidence);
+        if (value == null) {
+            return 0.0;
+        }
+        return Math.max(0.0, Math.min(value, 1.0)) * 0.10;
+    }
+
+    private double recencyBoost(Object createdAt) {
+        if (createdAt == null) {
+            return 0.0;
+        }
+        try {
+            LocalDateTime time = LocalDateTime.parse(createdAt.toString());
+            long days = Duration.between(time, LocalDateTime.now()).toDays();
+            if (days <= 30) {
+                return 0.04;
+            }
+            if (days <= 180) {
+                return 0.02;
+            }
+        } catch (DateTimeParseException e) {
+            return 0.0;
+        }
+        return 0.0;
+    }
+
+    private boolean isPreferredMemoryType(Document document, MemoryRetrievalPlan plan) {
+        String memoryType = memoryType(document);
+        return StringUtils.hasText(memoryType) && plan.preferredMemoryTypes().contains(memoryType);
+    }
+
+    private String memoryType(Document document) {
+        Object memoryType = document.getMetadata().get("memoryType");
+        if (memoryType == null) {
+            memoryType = document.getMetadata().get("type");
+        }
+        return memoryType == null ? "" : memoryType.toString();
     }
 
     private String buildPromptContext(
@@ -293,35 +418,37 @@ public class MemoryRetrievalService {
             List<MemoryContext.DecisionMemory> decisions,
             List<MemoryContext.RelationshipMemory> relationships,
             List<MemoryContext.ProfileMemory> fears,
-            List<MemoryContext.SemanticMemory> semanticMemories) {
+            List<MemoryContext.SemanticMemory> semanticMemories,
+            MemoryRetrievalPlan plan) {
+        String sections = plan.promptOrder()
+                .stream()
+                .map(section -> formatSection(
+                        section, values, emotions, decisions, relationships, fears, semanticMemories))
+                .collect(java.util.stream.Collectors.joining("\n\n"));
         return """
                 以下是系统检索到的用户长期记忆，仅作为参考，不代表用户当前最终意愿。
                 结构化画像表示较稳定的长期结论；相关场景记忆表示相似经历和证据补充，不要把场景记忆当作新的画像结论。
 
-                【稳定价值观】
                 %s
+                """.formatted(sections);
+    }
 
-                【情绪模式】
-                %s
-
-                【相似历史决策】
-                %s
-
-                【关系影响】
-                %s
-
-                【相关场景记忆】
-                %s
-
-                【恐惧与边界】
-                %s
-                """.formatted(
-                formatProfileMemories(values),
-                formatProfileMemories(emotions),
-                formatDecisionMemories(decisions),
-                formatRelationshipMemories(relationships),
-                formatSemanticMemories(semanticMemories),
-                formatProfileMemories(fears));
+    private String formatSection(
+            MemoryRetrievalPlan.Section section,
+            List<MemoryContext.ProfileMemory> values,
+            List<MemoryContext.ProfileMemory> emotions,
+            List<MemoryContext.DecisionMemory> decisions,
+            List<MemoryContext.RelationshipMemory> relationships,
+            List<MemoryContext.ProfileMemory> fears,
+            List<MemoryContext.SemanticMemory> semanticMemories) {
+        return switch (section) {
+            case VALUES -> "【稳定价值观】\n" + formatProfileMemories(values);
+            case EMOTIONS -> "【情绪模式】\n" + formatProfileMemories(emotions);
+            case DECISIONS -> "【相似历史决策】\n" + formatDecisionMemories(decisions);
+            case RELATIONSHIPS -> "【关系影响】\n" + formatRelationshipMemories(relationships);
+            case SEMANTIC_MEMORIES -> "【相关场景记忆】\n" + formatSemanticMemories(semanticMemories);
+            case FEARS -> "【恐惧与边界】\n" + formatProfileMemories(fears);
+        };
     }
 
     private String formatProfileMemories(List<MemoryContext.ProfileMemory> memories) {
@@ -421,16 +548,23 @@ public class MemoryRetrievalService {
                 fears,
                 semanticMemories,
                 new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0, 0, null, vectorAvailable, degraded),
-                buildPromptContext(values, emotions, decisions, relationships, fears, semanticMemories));
+                buildPromptContext(
+                        values,
+                        emotions,
+                        decisions,
+                        relationships,
+                        fears,
+                        semanticMemories,
+                        intentService.plan("")));
     }
 
-    private void recordAutoRecall(Long userId, String query, MemoryContext context) {
+    private void recordAutoRecall(Long userId, String query, MemoryContext context, MemoryRetrievalPlan plan) {
         try {
             retrievalLogService.recordAutoRecall(
                     userId,
                     query,
                     context,
-                    properties.semanticTopK(),
+                    plan.semanticTopK(),
                     properties.semanticSimilarityThreshold());
         } catch (Exception e) {
             logger.warn("Memory RAG 召回日志服务异常, userId: {}", userId, e);
@@ -451,6 +585,20 @@ public class MemoryRetrievalService {
 
     private Double toDouble(BigDecimal value) {
         return value == null ? null : value.doubleValue();
+    }
+
+    private Double toDouble(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return Double.valueOf(value.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private Integer toInteger(Object value) {
@@ -476,5 +624,12 @@ public class MemoryRetrievalService {
         public SemanticSearchResult {
             memories = List.copyOf(memories);
         }
+    }
+
+    private record SemanticCandidate(
+            Document document,
+            @Nullable ProfileSceneMemoryLink link,
+            int originalIndex,
+            double rerankScore) {
     }
 }
