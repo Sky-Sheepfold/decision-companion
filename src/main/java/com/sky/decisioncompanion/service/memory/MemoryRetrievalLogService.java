@@ -32,7 +32,7 @@ public class MemoryRetrievalLogService {
             Long userId,
             String query,
             MemoryContext context,
-            int semanticTopK,
+            MemoryRetrievalPlan plan,
             double semanticSimilarityThreshold) {
         if (userId == null || context == null) {
             return;
@@ -53,7 +53,11 @@ public class MemoryRetrievalLogService {
             log.setMaxSemanticScore(toScore(metrics.maxSemanticScore()));
             log.setVectorAvailable(metrics.vectorAvailable());
             log.setDegraded(metrics.degraded());
-            log.setSemanticTopK(semanticTopK);
+            log.setSemanticTopK(plan.semanticTopK());
+            log.setIntent(plan.intent().code());
+            log.setSemanticQuery(truncate(plan.semanticQuery(), QUERY_MAX_LENGTH));
+            log.setSemanticCandidateTopK(plan.semanticCandidateTopK());
+            log.setPreferredMemoryTypes(buildPreferredMemoryTypes(plan.preferredMemoryTypes()));
             log.setSemanticSimilarityThreshold(toThreshold(semanticSimilarityThreshold));
             log.setSemanticHitSummary(buildSemanticHitSummary(context.semanticMemories()));
             log.setPromptContextLength(context.promptContext() == null ? 0 : context.promptContext().length());
@@ -75,12 +79,26 @@ public class MemoryRetrievalLogService {
                         truncate(memory.content(), SUMMARY_CONTENT_MAX_LENGTH),
                         truncate(memory.type(), 80),
                         memory.profileRecordCount(),
-                        memory.score()))
+                        memory.score(),
+                        memory.rerankScore(),
+                        truncate(memory.rerankReason(), 300)))
                 .toList();
         try {
             return objectMapper.writeValueAsString(summaries);
         } catch (JsonProcessingException e) {
             logger.warn("Memory RAG 语义命中摘要序列化失败", e);
+            return "[]";
+        }
+    }
+
+    private String buildPreferredMemoryTypes(List<String> preferredMemoryTypes) {
+        if (preferredMemoryTypes == null || preferredMemoryTypes.isEmpty()) {
+            return "[]";
+        }
+        try {
+            return objectMapper.writeValueAsString(preferredMemoryTypes);
+        } catch (JsonProcessingException e) {
+            logger.warn("Memory RAG 优先记忆类型序列化失败", e);
             return "[]";
         }
     }
@@ -107,6 +125,8 @@ public class MemoryRetrievalLogService {
             String content,
             String type,
             Integer profileRecordCount,
-            Double score) {
+            Double score,
+            Double rerankScore,
+            String rerankReason) {
     }
 }

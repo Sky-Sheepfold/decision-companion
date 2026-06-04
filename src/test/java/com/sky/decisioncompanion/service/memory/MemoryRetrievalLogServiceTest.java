@@ -34,10 +34,18 @@ class MemoryRetrievalLogServiceTest {
     @Test
     void recordAutoRecallPersistsMetricsAndTopSemanticHitSummary() {
         MemoryContext context = context(List.of(
-                new MemoryContext.SemanticMemory("用户多次提到希望离父母近一点", "conversation_scene", 2, 0.82),
-                new MemoryContext.SemanticMemory("用户在毕业选择中倾向稳定性", "conversation_scene", 1, 0.71)));
+                new MemoryContext.SemanticMemory(
+                        "用户多次提到希望离父母近一点",
+                        "relationship",
+                        2,
+                        0.82,
+                        1.25,
+                        "vectorScore=0.8200, preferredType=relationship+0.2500"),
+                new MemoryContext.SemanticMemory("用户在毕业选择中倾向稳定性", "value", 1, 0.71)));
+        MemoryRetrievalPlan plan = new MemoryRetrievalIntentService(new com.sky.decisioncompanion.config.MemoryRetrievalProperties())
+                .plan("外地 offer 要不要接受？");
 
-        service.recordAutoRecall(1L, "外地 offer 要不要接受？".repeat(80), context, 5, 0.6);
+        service.recordAutoRecall(1L, "外地 offer 要不要接受？".repeat(80), context, plan, 0.6);
 
         ArgumentCaptor<MemoryRetrievalLog> captor = ArgumentCaptor.forClass(MemoryRetrievalLog.class);
         verify(repository).insert(captor.capture());
@@ -55,17 +63,27 @@ class MemoryRetrievalLogServiceTest {
         assertThat(log.getVectorAvailable()).isTrue();
         assertThat(log.getDegraded()).isFalse();
         assertThat(log.getSemanticTopK()).isEqualTo(5);
+        assertThat(log.getIntent()).isEqualTo("major_decision");
+        assertThat(log.getSemanticQuery()).contains("重大决策");
+        assertThat(log.getSemanticCandidateTopK()).isEqualTo(10);
+        assertThat(log.getPreferredMemoryTypes()).contains("value");
+        assertThat(log.getPreferredMemoryTypes()).contains("fear");
         assertThat(log.getSemanticSimilarityThreshold()).isEqualByComparingTo("0.60");
         assertThat(log.getPromptContextLength()).isEqualTo(context.promptContext().length());
         assertThat(log.getSemanticHitSummary()).contains("离父母近一点");
-        assertThat(log.getSemanticHitSummary()).contains("conversation_scene");
+        assertThat(log.getSemanticHitSummary()).contains("relationship");
+        assertThat(log.getSemanticHitSummary()).contains("rerankScore");
+        assertThat(log.getSemanticHitSummary()).contains("preferredType=relationship");
     }
 
     @Test
     void recordAutoRecallDoesNotThrowWhenInsertFails() {
         when(repository.insert(any(MemoryRetrievalLog.class))).thenThrow(new RuntimeException("db down"));
 
-        assertThatCode(() -> service.recordAutoRecall(1L, "query", context(List.of()), 5, 0.6))
+        MemoryRetrievalPlan plan = new MemoryRetrievalIntentService(new com.sky.decisioncompanion.config.MemoryRetrievalProperties())
+                .plan("query");
+
+        assertThatCode(() -> service.recordAutoRecall(1L, "query", context(List.of()), plan, 0.6))
                 .doesNotThrowAnyException();
     }
 

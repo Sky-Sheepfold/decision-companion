@@ -106,7 +106,7 @@ class MemoryRetrievalServiceTest {
         assertThat(context.metrics().semanticHitCount()).isEqualTo(1);
         assertThat(context.metrics().maxSemanticScore()).isEqualTo(0.82);
         verify(retrievalLogService).recordAutoRecall(eq(USER_ID), eq("我在纠结外地 offer"),
-                eq(context), eq(5), eq(0.3));
+                eq(context), any(MemoryRetrievalPlan.class), eq(0.3));
 
         ArgumentCaptor<SearchRequest> captor = ArgumentCaptor.forClass(SearchRequest.class);
         verify(vectorStore).similaritySearch(captor.capture());
@@ -183,14 +183,15 @@ class MemoryRetrievalServiceTest {
         when(decisionRecallService.recall(USER_ID, "随便聊聊", 3)).thenReturn(decisionResult());
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
         doThrow(new RuntimeException("db down")).when(retrievalLogService)
-                .recordAutoRecall(eq(USER_ID), eq("随便聊聊"), any(MemoryContext.class), eq(5), eq(0.3));
+                .recordAutoRecall(eq(USER_ID), eq("随便聊聊"), any(MemoryContext.class),
+                        any(MemoryRetrievalPlan.class), eq(0.3));
 
         MemoryContext context = service.retrieve(USER_ID, "随便聊聊");
 
         assertThat(context.promptContext()).contains("偏好长期确定性");
         assertThat(context.metrics().degraded()).isFalse();
         verify(retrievalLogService).recordAutoRecall(eq(USER_ID), eq("随便聊聊"),
-                eq(context), eq(5), eq(0.3));
+                eq(context), any(MemoryRetrievalPlan.class), eq(0.3));
     }
 
     @Test
@@ -256,6 +257,13 @@ class MemoryRetrievalServiceTest {
         assertThat(result.memories()).extracting(MemoryContext.SemanticMemory::type)
                 .containsExactly("relationship", "fear", "value");
         assertThat(result.maxScore()).isEqualTo(0.95);
+        MemoryContext.SemanticMemory first = result.memories().get(0);
+        assertThat(first.rerankScore()).isGreaterThan(first.score());
+        assertThat(first.rerankReason()).contains("vectorScore=0.7600");
+        assertThat(first.rerankReason()).contains("preferredType=relationship");
+        assertThat(first.rerankReason()).contains("confidence");
+        assertThat(first.rerankReason()).contains("recency");
+        assertThat(first.rerankReason()).contains("linkedProfile");
     }
 
     @Test

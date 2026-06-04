@@ -41,6 +41,19 @@ public class MemoryRetrievalLog {
     private Boolean vectorAvailable;
     private Boolean degraded;
     private Integer semanticTopK;
+
+    @Schema(description = "召回意图")
+    private String intent;
+
+    @Schema(description = "语义检索改写后的查询文本")
+    private String semanticQuery;
+
+    @Schema(description = "语义召回候选TopK")
+    private Integer semanticCandidateTopK;
+
+    @Schema(description = "本次意图优先召回的记忆类型(JSON)")
+    private String preferredMemoryTypes;
+
     private BigDecimal semanticSimilarityThreshold;
 
     @Schema(description = "Top 语义命中摘要(JSON)")

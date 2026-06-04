@@ -35,7 +35,21 @@ public record MemoryContext(
             String note) {
     }
 
-    public record SemanticMemory(String content, String type, Integer profileRecordCount, Double score) {
+    public record SemanticMemory(
+            String content,
+            String type,
+            Integer profileRecordCount,
+            Double score,
+            Double rerankScore,
+            String rerankReason) {
+
+        public SemanticMemory(String content, String type, Integer profileRecordCount, Double score) {
+            this(content, type, profileRecordCount, score, null, "");
+        }
+
+        public SemanticMemory {
+            rerankReason = rerankReason == null ? "" : rerankReason;
+        }
     }
 
     public record RetrievalMetrics(

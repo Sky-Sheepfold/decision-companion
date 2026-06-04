@@ -29,6 +29,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 @Service
@@ -170,11 +171,10 @@ public class MemoryRetrievalService {
             List<MemoryContext.SemanticMemory> memories = chooseRerankPool(candidates, plan, safeResultTopK)
                     .stream()
                     .sorted(Comparator
-                            .comparingDouble(SemanticCandidate::rerankScore)
+                            .<SemanticCandidate>comparingDouble(candidate -> candidate.rerankScore().score())
                             .reversed()
                             .thenComparingInt(SemanticCandidate::originalIndex))
                     .limit(safeResultTopK)
-                    .map(SemanticCandidate::document)
                     .map(this::toSemanticMemory)
                     .filter(memory -> StringUtils.hasText(memory.content()))
                     .toList();
@@ -315,7 +315,8 @@ public class MemoryRetrievalService {
                 .toList();
     }
 
-    private MemoryContext.SemanticMemory toSemanticMemory(Document document) {
+    private MemoryContext.SemanticMemory toSemanticMemory(SemanticCandidate candidate) {
+        Document document = candidate.document();
         String content = document.getText();
         if (!StringUtils.hasText(content)) {
             content = document.getFormattedContent();
@@ -325,7 +326,9 @@ public class MemoryRetrievalService {
                 truncate(content),
                 StringUtils.hasText(memoryType(document)) ? memoryType(document) : "memory",
                 toInteger(recordCount),
-                document.getScore());
+                document.getScore(),
+                candidate.rerankScore().score(),
+                candidate.rerankScore().reason());
     }
 
     private boolean isActiveSceneMemory(Document document) {
@@ -348,15 +351,36 @@ public class MemoryRetrievalService {
         return Boolean.TRUE.equals(link.getActive()) && "active".equals(link.getDeleteStatus());
     }
 
-    private double rerankScore(Document document, @Nullable ProfileSceneMemoryLink link, MemoryRetrievalPlan plan) {
+    private RerankScore rerankScore(Document document, @Nullable ProfileSceneMemoryLink link, MemoryRetrievalPlan plan) {
         double score = document.getScore() == null ? 0.0 : document.getScore();
-        score += memoryTypeBoost(memoryType(document), plan);
-        score += confidenceBoost(document.getMetadata().get("confidence"));
-        score += recencyBoost(document.getMetadata().get("createdAt"));
-        if (link != null && Boolean.TRUE.equals(link.getActive()) && "active".equals(link.getDeleteStatus())) {
-            score += 0.08;
+        List<String> reasons = new ArrayList<>();
+        reasons.add("vectorScore=" + formatScore(score));
+
+        String memoryType = memoryType(document);
+        double typeBoost = memoryTypeBoost(memoryType, plan);
+        if (typeBoost > 0.0) {
+            reasons.add("preferredType=" + memoryType + "+" + formatScore(typeBoost));
+            score += typeBoost;
         }
-        return score;
+
+        double confidenceBoost = confidenceBoost(document.getMetadata().get("confidence"));
+        if (confidenceBoost > 0.0) {
+            reasons.add("confidence+" + formatScore(confidenceBoost));
+            score += confidenceBoost;
+        }
+
+        double recencyBoost = recencyBoost(document.getMetadata().get("createdAt"));
+        if (recencyBoost > 0.0) {
+            reasons.add("recency+" + formatScore(recencyBoost));
+            score += recencyBoost;
+        }
+
+        if (link != null && Boolean.TRUE.equals(link.getActive()) && "active".equals(link.getDeleteStatus())) {
+            double linkBoost = 0.08;
+            reasons.add("linkedProfile+" + formatScore(linkBoost));
+            score += linkBoost;
+        }
+        return new RerankScore(score, String.join(", ", reasons));
     }
 
     private double memoryTypeBoost(String memoryType, MemoryRetrievalPlan plan) {
@@ -564,7 +588,7 @@ public class MemoryRetrievalService {
                     userId,
                     query,
                     context,
-                    plan.semanticTopK(),
+                    plan,
                     properties.semanticSimilarityThreshold());
         } catch (Exception e) {
             logger.warn("Memory RAG 召回日志服务异常, userId: {}", userId, e);
@@ -615,6 +639,10 @@ public class MemoryRetrievalService {
         }
     }
 
+    private String formatScore(double value) {
+        return String.format(Locale.ROOT, "%.4f", value);
+    }
+
     public record SemanticSearchResult(
             List<MemoryContext.SemanticMemory> memories,
             Double maxScore,
@@ -630,6 +658,9 @@ public class MemoryRetrievalService {
             Document document,
             @Nullable ProfileSceneMemoryLink link,
             int originalIndex,
-            double rerankScore) {
+            RerankScore rerankScore) {
+    }
+
+    private record RerankScore(double score, String reason) {
     }
 }
