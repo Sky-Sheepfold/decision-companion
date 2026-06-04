@@ -8,7 +8,7 @@ public class MemoryRetrievalProperties {
     private int sectionLimit = 5;
     private int textMaxLength = 200;
     private int semanticTopK = 5;
-    private double semanticSimilarityThreshold = 0.6;
+    private double semanticSimilarityThreshold = 0.3;
     private Decision decision = new Decision();
 
     public int getSectionLimit() {

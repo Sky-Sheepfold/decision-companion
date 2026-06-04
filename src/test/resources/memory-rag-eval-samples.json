@@ -1,0 +1,56 @@
+{
+  "version": "p0",
+  "description": "Memory RAG P0 recall guardrail samples for manual/offline evaluation.",
+  "samples": [
+    {
+      "id": "user-isolation",
+      "query": "我在纠结要不要接受外地 offer",
+      "expectedSignals": [
+        "召回请求必须携带当前 userId",
+        "Chroma filterExpression 只允许命中当前用户的场景记忆",
+        "Prompt 中不应出现其他用户的价值观、关系或场景证据"
+      ],
+      "guardrail": "禁止跨用户召回。"
+    },
+    {
+      "id": "active-scene-filter",
+      "query": "我最近又在考虑离家远近的问题",
+      "expectedSignals": [
+        "active=true 且 deleteStatus=active 的场景记忆可以进入结果",
+        "已删除或删除失败的场景记忆不能注入 Prompt",
+        "无 profile_scene_memory_link 的历史向量按兼容策略保留"
+      ],
+      "guardrail": "失效场景记忆不能污染长期记忆背景。"
+    },
+    {
+      "id": "similarity-threshold",
+      "query": "毕业后应该去大城市还是留在本地",
+      "expectedSignals": [
+        "SearchRequest 使用配置的 semanticSimilarityThreshold",
+        "低相似度语义记忆不应计入 semanticHitCount",
+        "日志记录本次 TopK 与阈值"
+      ],
+      "guardrail": "避免把弱相关经历误当作当前决策证据。"
+    },
+    {
+      "id": "semantic-scene-hit",
+      "query": "我是不是一直很在意父母的意见",
+      "expectedSignals": [
+        "相似场景记忆作为证据摘要补充结构化画像",
+        "Prompt 使用相关场景记忆区块而不是画像结论区块承载语义命中",
+        "召回日志记录 semanticHitCount 与 maxSemanticScore"
+      ],
+      "guardrail": "场景记忆只能作为证据补充，不能被包装成新的稳定画像。"
+    },
+    {
+      "id": "vector-degradation",
+      "query": "我想复盘最近几次工作选择",
+      "expectedSignals": [
+        "VectorStore 缺失或异常时仍返回结构化画像与历史决策",
+        "metrics.vectorAvailable=false 或 degraded=true",
+        "主对话链路不因 Chroma 或日志写入失败而中断"
+      ],
+      "guardrail": "向量召回是增强项，不是聊天主流程的单点依赖。"
+    }
+  ]
+}

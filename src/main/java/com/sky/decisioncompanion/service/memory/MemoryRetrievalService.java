@@ -40,6 +40,7 @@ public class MemoryRetrievalService {
     private final VectorStore vectorStore;
     private final MemoryRetrievalProperties properties;
     private final DecisionRecallService decisionRecallService;
+    private final MemoryRetrievalLogService retrievalLogService;
 
     public MemoryRetrievalService(
             ProfileValuesRepository valuesRepository,
@@ -49,7 +50,8 @@ public class MemoryRetrievalService {
             ProfileSceneMemoryLinkRepository sceneMemoryLinkRepository,
             @Autowired(required = false) @Nullable VectorStore vectorStore,
             MemoryRetrievalProperties properties,
-            DecisionRecallService decisionRecallService) {
+            DecisionRecallService decisionRecallService,
+            MemoryRetrievalLogService retrievalLogService) {
         this.valuesRepository = valuesRepository;
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
@@ -58,6 +60,7 @@ public class MemoryRetrievalService {
         this.vectorStore = vectorStore;
         this.properties = properties;
         this.decisionRecallService = decisionRecallService;
+        this.retrievalLogService = retrievalLogService;
     }
 
     public MemoryContext retrieve(Long userId, String query) {
@@ -105,11 +108,11 @@ public class MemoryRetrievalService {
                 degraded);
 
         logger.info("Memory RAG 召回完成, userId: {}, valueCount: {}, emotionCount: {}, decisionCount: {}, "
-                        + "relationshipCount: {}, fearCount: {}, semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
+                + "relationshipCount: {}, fearCount: {}, semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
                 userId, values.size(), emotions.size(), decisions.size(), relationships.size(), fears.size(),
                 semanticResult.memories().size(), semanticResult.maxScore(), degraded);
 
-        return new MemoryContext(
+        MemoryContext context = new MemoryContext(
                 values,
                 emotions,
                 decisions,
@@ -118,6 +121,8 @@ public class MemoryRetrievalService {
                 semanticResult.memories(),
                 metrics,
                 promptContext);
+        recordAutoRecall(userId, query, context);
+        return context;
     }
 
     public SemanticSearchResult searchSemanticMemories(Long userId, String query, Integer topK) {
@@ -159,11 +164,11 @@ public class MemoryRetrievalService {
 
     private List<MemoryContext.ProfileMemory> getValues(Long userId) {
         return valuesRepository.selectList(new LambdaQueryWrapper<ProfileValues>()
-                        .eq(ProfileValues::getUserId, userId)
-                        .eq(ProfileValues::getActive, true)
-                        .orderByDesc(ProfileValues::getConfidence)
-                        .orderByDesc(ProfileValues::getUpdatedAt)
-                        .last("LIMIT " + properties.sectionLimit()))
+                .eq(ProfileValues::getUserId, userId)
+                .eq(ProfileValues::getActive, true)
+                .orderByDesc(ProfileValues::getConfidence)
+                .orderByDesc(ProfileValues::getUpdatedAt)
+                .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(value -> Objects.equals(userId, value.getUserId()))
                 .filter(value -> Boolean.TRUE.equals(value.getActive()))
@@ -179,10 +184,10 @@ public class MemoryRetrievalService {
 
     private List<MemoryContext.ProfileMemory> getEmotions(Long userId) {
         return emotionRepository.selectList(new LambdaQueryWrapper<ProfileEmotion>()
-                        .eq(ProfileEmotion::getUserId, userId)
-                        .eq(ProfileEmotion::getActive, true)
-                        .orderByDesc(ProfileEmotion::getUpdatedAt)
-                        .last("LIMIT " + properties.sectionLimit()))
+                .eq(ProfileEmotion::getUserId, userId)
+                .eq(ProfileEmotion::getActive, true)
+                .orderByDesc(ProfileEmotion::getUpdatedAt)
+                .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(emotion -> Objects.equals(userId, emotion.getUserId()))
                 .filter(emotion -> Boolean.TRUE.equals(emotion.getActive()))
@@ -215,10 +220,10 @@ public class MemoryRetrievalService {
 
     private List<MemoryContext.RelationshipMemory> getRelationships(Long userId) {
         return relationshipRepository.selectList(new LambdaQueryWrapper<ProfileRelationship>()
-                        .eq(ProfileRelationship::getUserId, userId)
-                        .eq(ProfileRelationship::getActive, true)
-                        .orderByDesc(ProfileRelationship::getUpdatedAt)
-                        .last("LIMIT " + properties.sectionLimit()))
+                .eq(ProfileRelationship::getUserId, userId)
+                .eq(ProfileRelationship::getActive, true)
+                .orderByDesc(ProfileRelationship::getUpdatedAt)
+                .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(relationship -> Objects.equals(userId, relationship.getUserId()))
                 .filter(relationship -> Boolean.TRUE.equals(relationship.getActive()))
@@ -237,11 +242,11 @@ public class MemoryRetrievalService {
 
     private List<MemoryContext.ProfileMemory> getFears(Long userId) {
         return fearRepository.selectList(new LambdaQueryWrapper<ProfileFear>()
-                        .eq(ProfileFear::getUserId, userId)
-                        .eq(ProfileFear::getActive, true)
-                        .orderByDesc(ProfileFear::getConfidence)
-                        .orderByDesc(ProfileFear::getUpdatedAt)
-                        .last("LIMIT " + properties.sectionLimit()))
+                .eq(ProfileFear::getUserId, userId)
+                .eq(ProfileFear::getActive, true)
+                .orderByDesc(ProfileFear::getConfidence)
+                .orderByDesc(ProfileFear::getUpdatedAt)
+                .last("LIMIT " + properties.sectionLimit()))
                 .stream()
                 .filter(fear -> Objects.equals(userId, fear.getUserId()))
                 .filter(fear -> Boolean.TRUE.equals(fear.getActive()))
@@ -273,8 +278,9 @@ public class MemoryRetrievalService {
         if (!StringUtils.hasText(document.getId())) {
             return true;
         }
-        ProfileSceneMemoryLink link = sceneMemoryLinkRepository.selectOne(new LambdaQueryWrapper<ProfileSceneMemoryLink>()
-                .eq(ProfileSceneMemoryLink::getDocumentId, document.getId()));
+        ProfileSceneMemoryLink link = sceneMemoryLinkRepository
+                .selectOne(new LambdaQueryWrapper<ProfileSceneMemoryLink>()
+                        .eq(ProfileSceneMemoryLink::getDocumentId, document.getId()));
         if (link == null) {
             return true;
         }
@@ -416,6 +422,19 @@ public class MemoryRetrievalService {
                 semanticMemories,
                 new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0, 0, null, vectorAvailable, degraded),
                 buildPromptContext(values, emotions, decisions, relationships, fears, semanticMemories));
+    }
+
+    private void recordAutoRecall(Long userId, String query, MemoryContext context) {
+        try {
+            retrievalLogService.recordAutoRecall(
+                    userId,
+                    query,
+                    context,
+                    properties.semanticTopK(),
+                    properties.semanticSimilarityThreshold());
+        } catch (Exception e) {
+            logger.warn("Memory RAG 召回日志服务异常, userId: {}", userId, e);
+        }
     }
 
     private String clean(String value) {

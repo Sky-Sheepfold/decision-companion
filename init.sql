@@ -68,6 +68,31 @@ CREATE TABLE IF NOT EXISTS agent_tool_call_log (
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent工具调用日志';
 
+-- Memory RAG 召回日志
+CREATE TABLE IF NOT EXISTS memory_retrieval_log (
+    id                            BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id                       BIGINT NOT NULL COMMENT '用户ID',
+    retrieval_source              VARCHAR(50) NOT NULL COMMENT '召回来源，当前自动注入召回为 auto_prompt',
+    query_text                    VARCHAR(1000) COMMENT '召回查询文本',
+    value_count                   INT NOT NULL DEFAULT 0 COMMENT '价值观命中数',
+    emotion_count                 INT NOT NULL DEFAULT 0 COMMENT '情绪模式命中数',
+    decision_count                INT NOT NULL DEFAULT 0 COMMENT '历史决策命中数',
+    relationship_count            INT NOT NULL DEFAULT 0 COMMENT '关系影响命中数',
+    fear_count                    INT NOT NULL DEFAULT 0 COMMENT '恐惧与边界命中数',
+    semantic_hit_count            INT NOT NULL DEFAULT 0 COMMENT '语义记忆命中数',
+    max_semantic_score            DECIMAL(6,4) COMMENT '最高语义相似度',
+    vector_available              BOOLEAN NOT NULL DEFAULT TRUE COMMENT '向量库是否可用',
+    degraded                      BOOLEAN NOT NULL DEFAULT FALSE COMMENT '本次召回是否降级',
+    semantic_top_k                INT COMMENT '语义召回TopK',
+    semantic_similarity_threshold DECIMAL(4,3) COMMENT '语义召回阈值',
+    semantic_hit_summary          JSON COMMENT 'Top语义命中摘要',
+    prompt_context_length         INT COMMENT '长期记忆背景长度',
+    created_at                    DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_memory_retrieval_user_created (user_id, created_at),
+    INDEX idx_memory_retrieval_degraded_created (degraded, created_at),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Memory RAG召回日志';
+
 -- 档案三：情绪模式
 CREATE TABLE IF NOT EXISTS profile_emotion (
     id           BIGINT PRIMARY KEY AUTO_INCREMENT,

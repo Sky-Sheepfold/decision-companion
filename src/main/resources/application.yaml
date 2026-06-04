@@ -42,7 +42,7 @@ decision-companion:
       section-limit: 5
       text-max-length: 200
       semantic-top-k: 5
-      semantic-similarity-threshold: 0.6
+      semantic-similarity-threshold: 0.3
       decision:
         default-limit: 3
         max-limit: 5

@@ -27,6 +27,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -55,6 +56,9 @@ class MemoryRetrievalServiceTest {
 
     @Mock
     private DecisionRecallService decisionRecallService;
+
+    @Mock
+    private MemoryRetrievalLogService retrievalLogService;
 
     private MemoryRetrievalService service;
 
@@ -100,13 +104,15 @@ class MemoryRetrievalServiceTest {
         assertThat(context.semanticMemories()).hasSize(1);
         assertThat(context.metrics().semanticHitCount()).isEqualTo(1);
         assertThat(context.metrics().maxSemanticScore()).isEqualTo(0.82);
+        verify(retrievalLogService).recordAutoRecall(eq(USER_ID), eq("我在纠结外地 offer"),
+                eq(context), eq(5), eq(0.3));
 
         ArgumentCaptor<SearchRequest> captor = ArgumentCaptor.forClass(SearchRequest.class);
         verify(vectorStore).similaritySearch(captor.capture());
         SearchRequest request = captor.getValue();
         assertThat(request.getQuery()).isEqualTo("我在纠结外地 offer");
         assertThat(request.getTopK()).isEqualTo(5);
-        assertThat(request.getSimilarityThreshold()).isEqualTo(0.6);
+        assertThat(request.getSimilarityThreshold()).isEqualTo(0.3);
         assertThat(request.getFilterExpression().toString()).contains("userId");
         assertThat(request.getFilterExpression().toString()).contains("1");
     }
@@ -164,6 +170,25 @@ class MemoryRetrievalServiceTest {
         assertThat(context.semanticMemories()).isEmpty();
         assertThat(context.metrics().vectorAvailable()).isFalse();
         assertThat(context.metrics().degraded()).isTrue();
+    }
+
+    @Test
+    void retrieveKeepsReturningContextWhenRetrievalLogWriteFails() {
+        when(valuesRepository.selectList(any())).thenReturn(List.of(value("稳定性", "偏好长期确定性", "0.85")));
+        when(emotionRepository.selectList(any())).thenReturn(List.of());
+        when(relationshipRepository.selectList(any())).thenReturn(List.of());
+        when(fearRepository.selectList(any())).thenReturn(List.of());
+        when(decisionRecallService.recall(USER_ID, "随便聊聊", 3)).thenReturn(decisionResult());
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+        doThrow(new RuntimeException("db down")).when(retrievalLogService)
+                .recordAutoRecall(eq(USER_ID), eq("随便聊聊"), any(MemoryContext.class), eq(5), eq(0.3));
+
+        MemoryContext context = service.retrieve(USER_ID, "随便聊聊");
+
+        assertThat(context.promptContext()).contains("偏好长期确定性");
+        assertThat(context.metrics().degraded()).isFalse();
+        verify(retrievalLogService).recordAutoRecall(eq(USER_ID), eq("随便聊聊"),
+                eq(context), eq(5), eq(0.3));
     }
 
     @Test
@@ -250,7 +275,8 @@ class MemoryRetrievalServiceTest {
                 sceneMemoryLinkRepository,
                 vectorStore,
                 properties,
-                decisionRecallService);
+                decisionRecallService,
+                retrievalLogService);
     }
 
     private ProfileValues value(String item, String preference, String confidence) {
