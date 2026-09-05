@@ -90,7 +90,8 @@ class MemoryRetrievalServiceTest {
 
         assertThat(context.promptContext()).contains("仅作为参考");
         assertThat(context.promptContext()).contains("【稳定价值观】");
-        assertThat(context.promptContext()).contains("更看重离家近");
+        assertThat(context.coreProfiles()).extracting(MemoryContext.ProfileMemory::content)
+                .contains("更看重离家近");
         assertThat(context.promptContext()).contains("【相似历史决策】");
         assertThat(context.promptContext()).contains("外地 offer");
         assertThat(context.promptContext()).contains("【关系影响】");
@@ -143,10 +144,11 @@ class MemoryRetrievalServiceTest {
 
         MemoryContext context = service.retrieve(USER_ID, "query");
 
-        assertThat(context.promptContext()).contains("更看重离家近");
         assertThat(context.promptContext()).contains("被催促时容易压力变大");
         assertThat(context.promptContext()).contains("从安全和稳定角度影响选择");
         assertThat(context.promptContext()).contains("害怕离家太远");
+        assertThat(context.coreProfiles()).extracting(MemoryContext.ProfileMemory::content)
+                .contains("更看重离家近");
         assertThat(context.promptContext()).doesNotContain("曾经想远离家庭");
         assertThat(context.promptContext()).doesNotContain("已失效的冲动模式");
         assertThat(context.promptContext()).doesNotContain("已失效的建议影响");
@@ -155,6 +157,30 @@ class MemoryRetrievalServiceTest {
         assertThat(context.metrics().emotionCount()).isEqualTo(1);
         assertThat(context.metrics().relationshipCount()).isEqualTo(1);
         assertThat(context.metrics().fearCount()).isEqualTo(1);
+    }
+
+    @Test
+    void retrieveAlwaysInjectsHighConfidenceCoreProfilesRegardlessOfIntentLimits() {
+        // 情绪倾诉意图下 valuesLimit 很小，但高置信核心价值观/恐惧仍应恒定注入
+        String query = "我最近压力很大很焦虑";
+        when(valuesRepository.selectList(any())).thenReturn(List.of(
+                value("家庭", "更看重家庭", "0.95"),
+                value("职业", "看重职业成长", "0.90")));
+        when(emotionRepository.selectList(any())).thenReturn(List.of(emotion("焦虑", "压力大时内耗")));
+        when(relationshipRepository.selectList(any())).thenReturn(List.of());
+        when(fearRepository.selectList(any())).thenReturn(List.of(fear("fear", "害怕失控", "0.88")));
+        when(decisionRecallService.recall(USER_ID, query, 1)).thenReturn(decisionResult());
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        MemoryContext context = service.retrieve(USER_ID, query);
+
+        // 核心稳定画像恒定注入两条高置信价值观 + 一条高置信恐惧
+        assertThat(context.coreProfiles()).hasSize(3);
+        assertThat(context.coreProfiles()).extracting(MemoryContext.ProfileMemory::subject)
+                .contains("家庭", "职业", "fear");
+        // 易变块（volatile）与核心去重：不再重复展示已恒定注入的画像
+        assertThat(context.promptContext()).doesNotContain("更看重家庭");
+        assertThat(context.promptContext()).doesNotContain("害怕失控");
     }
 
     @Test
@@ -168,7 +194,8 @@ class MemoryRetrievalServiceTest {
 
         MemoryContext context = serviceWithoutVector.retrieve(USER_ID, "随便聊聊");
 
-        assertThat(context.promptContext()).contains("偏好长期确定性");
+        assertThat(context.coreProfiles()).extracting(MemoryContext.ProfileMemory::content)
+                .contains("偏好长期确定性");
         assertThat(context.semanticMemories()).isEmpty();
         assertThat(context.metrics().vectorAvailable()).isFalse();
         assertThat(context.metrics().degraded()).isTrue();
@@ -188,7 +215,8 @@ class MemoryRetrievalServiceTest {
 
         MemoryContext context = service.retrieve(USER_ID, "随便聊聊");
 
-        assertThat(context.promptContext()).contains("偏好长期确定性");
+        assertThat(context.coreProfiles()).extracting(MemoryContext.ProfileMemory::content)
+                .contains("偏好长期确定性");
         assertThat(context.metrics().degraded()).isFalse();
         verify(retrievalLogService).recordAutoRecall(eq(USER_ID), eq("随便聊聊"),
                 eq(context), any(MemoryRetrievalPlan.class), eq(0.3));
@@ -320,9 +348,9 @@ class MemoryRetrievalServiceTest {
         properties.setSemanticSimilarityThreshold(0.72);
         service = service(properties, vectorStore);
         when(valuesRepository.selectList(any())).thenReturn(List.of(
-                value("v1", "p1", "0.9"),
-                value("v2", "p2", "0.9"),
-                value("v3", "p3", "0.9")));
+                value("v1", "p1", "0.95"),
+                value("v2", "p2", "0.60"),
+                value("v3", "p3", "0.40")));
         when(emotionRepository.selectList(any())).thenReturn(List.of());
         when(relationshipRepository.selectList(any())).thenReturn(List.of());
         when(fearRepository.selectList(any())).thenReturn(List.of());

@@ -29,10 +29,12 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @Service
 public class MemoryRetrievalService {
@@ -97,6 +99,14 @@ public class MemoryRetrievalService {
             logger.warn("长期记忆结构化画像召回失败, userId: {}", userId, e);
         }
 
+        List<MemoryContext.ProfileMemory> coreProfiles = List.of();
+        try {
+            coreProfiles = getCoreProfiles(userId);
+        } catch (Exception e) {
+            degraded = true;
+            logger.warn("核心稳定画像召回失败, userId: {}", userId, e);
+        }
+
         SemanticSearchResult semanticResult = searchSemanticMemories(userId, query, plan, plan.semanticTopK());
         degraded = degraded || semanticResult.degraded();
 
@@ -106,6 +116,7 @@ public class MemoryRetrievalService {
                 decisions,
                 relationships,
                 fears,
+                coreProfiles,
                 semanticResult.memories(),
                 plan);
         MemoryContext.RetrievalMetrics metrics = new MemoryContext.RetrievalMetrics(
@@ -120,9 +131,9 @@ public class MemoryRetrievalService {
                 degraded);
 
         logger.info("Memory RAG 召回完成, userId: {}, intent: {}, valueCount: {}, emotionCount: {}, decisionCount: {}, "
-                + "relationshipCount: {}, fearCount: {}, semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
+                + "relationshipCount: {}, fearCount: {}, coreCount: {}, semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
                 userId, plan.intent().code(), values.size(), emotions.size(), decisions.size(), relationships.size(),
-                fears.size(), semanticResult.memories().size(), semanticResult.maxScore(), degraded);
+                fears.size(), coreProfiles.size(), semanticResult.memories().size(), semanticResult.maxScore(), degraded);
 
         MemoryContext context = new MemoryContext(
                 values,
@@ -130,6 +141,7 @@ public class MemoryRetrievalService {
                 decisions,
                 relationships,
                 fears,
+                coreProfiles,
                 semanticResult.memories(),
                 metrics,
                 promptContext);
@@ -468,18 +480,24 @@ public class MemoryRetrievalService {
         return memoryType == null ? "" : memoryType.toString();
     }
 
+    /**
+     * 生成易变（volatile）召回块：仅含动态意图区块（已与核心画像去重），
+     * 供组装 user message 前置使用。核心稳定画像由 {@link #renderCoreSection} 单独渲染进 system prompt。
+     */
     private String buildPromptContext(
             List<MemoryContext.ProfileMemory> values,
             List<MemoryContext.ProfileMemory> emotions,
             List<MemoryContext.DecisionMemory> decisions,
             List<MemoryContext.RelationshipMemory> relationships,
             List<MemoryContext.ProfileMemory> fears,
+            List<MemoryContext.ProfileMemory> coreProfiles,
             List<MemoryContext.SemanticMemory> semanticMemories,
             MemoryRetrievalPlan plan) {
+        Set<String> coreSubjects = coreSubjects(coreProfiles);
         String sections = plan.promptOrder()
                 .stream()
                 .map(section -> formatSection(
-                        section, values, emotions, decisions, relationships, fears, semanticMemories))
+                        section, values, emotions, decisions, relationships, fears, semanticMemories, coreSubjects))
                 .collect(java.util.stream.Collectors.joining("\n\n"));
         return """
                 以下是系统检索到的用户长期记忆，仅作为参考，不代表用户当前最终意愿。
@@ -489,6 +507,31 @@ public class MemoryRetrievalService {
                 """.formatted(sections);
     }
 
+    /**
+     * 渲染【核心稳定画像（始终参考）】稳定块：高置信价值观/恐惧边界，与意图无关恒定注入 system prompt，
+     * 作为稳定前缀利于 provider prompt cache 命中。
+     */
+    public String renderCoreSection(List<MemoryContext.ProfileMemory> coreProfiles) {
+        if (coreProfiles == null || coreProfiles.isEmpty()) {
+            return "【核心稳定画像（始终参考）】\n（暂无稳定画像结论）";
+        }
+        String lines = coreProfiles.stream()
+                .limit(properties.core().totalLimit())
+                .map(memory -> {
+                    String subject = clean(memory.subject());
+                    String content = clean(memory.content());
+                    String line = subject.isBlank() ? content : subject + "：" + content;
+                    if (memory.confidence() != null) {
+                        line += "（置信度 " + formatScore(memory.confidence()) + "）";
+                    }
+                    return "- " + line;
+                })
+                .toList()
+                .stream()
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return "【核心稳定画像（始终参考）】\n" + lines;
+    }
+
     private String formatSection(
             MemoryRetrievalPlan.Section section,
             List<MemoryContext.ProfileMemory> values,
@@ -496,15 +539,107 @@ public class MemoryRetrievalService {
             List<MemoryContext.DecisionMemory> decisions,
             List<MemoryContext.RelationshipMemory> relationships,
             List<MemoryContext.ProfileMemory> fears,
-            List<MemoryContext.SemanticMemory> semanticMemories) {
+            List<MemoryContext.SemanticMemory> semanticMemories,
+            Set<String> coreSubjects) {
         return switch (section) {
-            case VALUES -> "【稳定价值观】\n" + formatProfileMemories(values);
+            case VALUES -> "【稳定价值观】\n" + formatProfileMemories(filterOutCore(values, coreSubjects));
             case EMOTIONS -> "【情绪模式】\n" + formatProfileMemories(emotions);
             case DECISIONS -> "【相似历史决策】\n" + formatDecisionMemories(decisions);
             case RELATIONSHIPS -> "【关系影响】\n" + formatRelationshipMemories(relationships);
             case SEMANTIC_MEMORIES -> "【相关场景记忆】\n" + formatSemanticMemories(semanticMemories);
-            case FEARS -> "【恐惧与边界】\n" + formatProfileMemories(fears);
+            case FEARS -> "【恐惧与边界】\n" + formatProfileMemories(filterOutCore(fears, coreSubjects));
         };
+    }
+
+    /**
+     * 恒定注入的高置信稳定画像：价值观 + 恐惧/边界（仅这两类画像存有 confidence）。
+     */
+    private List<MemoryContext.ProfileMemory> getCoreProfiles(Long userId) {
+        double threshold = properties.core().confidenceThreshold();
+        int valueLimit = properties.core().valueLimit();
+        int fearLimit = properties.core().fearLimit();
+        int totalLimit = properties.core().totalLimit();
+        List<MemoryContext.ProfileMemory> core = new ArrayList<>();
+
+        if (valueLimit > 0) {
+            List<MemoryContext.ProfileMemory> coreValues = valuesRepository.selectList(
+                            new LambdaQueryWrapper<ProfileValues>()
+                                    .eq(ProfileValues::getUserId, userId)
+                                    .eq(ProfileValues::getActive, true)
+                                    .ge(ProfileValues::getConfidence, threshold)
+                                    .orderByDesc(ProfileValues::getConfidence)
+                                    .orderByDesc(ProfileValues::getUpdatedAt)
+                                    .last("LIMIT " + valueLimit))
+                    .stream()
+                    .filter(value -> Objects.equals(userId, value.getUserId()))
+                    .filter(value -> Boolean.TRUE.equals(value.getActive()))
+                    .filter(value -> value.getConfidence() != null
+                            && value.getConfidence().doubleValue() >= threshold)
+                    .limit(valueLimit)
+                    .map(value -> new MemoryContext.ProfileMemory(
+                            clean(value.getItem()),
+                            truncate(value.getPreference()),
+                            "",
+                            toDouble(value.getConfidence())))
+                    .filter(memory -> StringUtils.hasText(memory.subject()) || StringUtils.hasText(memory.content()))
+                    .toList();
+            core.addAll(coreValues);
+        }
+
+        if (fearLimit > 0 && core.size() < totalLimit) {
+            int remainingFearLimit = Math.min(fearLimit, totalLimit - core.size());
+            List<MemoryContext.ProfileMemory> coreFears = fearRepository.selectList(
+                            new LambdaQueryWrapper<ProfileFear>()
+                                    .eq(ProfileFear::getUserId, userId)
+                                    .eq(ProfileFear::getActive, true)
+                                    .ge(ProfileFear::getConfidence, threshold)
+                                    .orderByDesc(ProfileFear::getConfidence)
+                                    .orderByDesc(ProfileFear::getUpdatedAt)
+                                    .last("LIMIT " + remainingFearLimit))
+                    .stream()
+                    .filter(fear -> Objects.equals(userId, fear.getUserId()))
+                    .filter(fear -> Boolean.TRUE.equals(fear.getActive()))
+                    .filter(fear -> fear.getConfidence() != null
+                            && fear.getConfidence().doubleValue() >= threshold)
+                    .limit(remainingFearLimit)
+                    .map(fear -> new MemoryContext.ProfileMemory(
+                            clean(fear.getType()),
+                            truncate(fear.getDescription()),
+                            truncate(fear.getManifestation()),
+                            toDouble(fear.getConfidence())))
+                    .filter(memory -> StringUtils.hasText(memory.subject()) || StringUtils.hasText(memory.content()))
+                    .toList();
+            core.addAll(coreFears);
+        }
+
+        return core.stream().limit(totalLimit).toList();
+    }
+
+    /** 取核心画像的规范化 subject 集合，用于动态区块去重。 */
+    private Set<String> coreSubjects(List<MemoryContext.ProfileMemory> coreProfiles) {
+        if (coreProfiles.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> subjects = new HashSet<>();
+        for (MemoryContext.ProfileMemory memory : coreProfiles) {
+            subjects.add(normalizeKey(memory.subject()));
+        }
+        return subjects;
+    }
+
+    private List<MemoryContext.ProfileMemory> filterOutCore(
+            List<MemoryContext.ProfileMemory> memories,
+            Set<String> coreSubjects) {
+        if (coreSubjects.isEmpty() || memories.isEmpty()) {
+            return memories;
+        }
+        return memories.stream()
+                .filter(memory -> !coreSubjects.contains(normalizeKey(memory.subject())))
+                .toList();
+    }
+
+    private String normalizeKey(String value) {
+        return clean(value).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
     }
 
     private String formatProfileMemories(List<MemoryContext.ProfileMemory> memories) {
@@ -595,6 +730,7 @@ public class MemoryRetrievalService {
         List<MemoryContext.DecisionMemory> decisions = List.of();
         List<MemoryContext.RelationshipMemory> relationships = List.of();
         List<MemoryContext.ProfileMemory> fears = List.of();
+        List<MemoryContext.ProfileMemory> coreProfiles = List.of();
         List<MemoryContext.SemanticMemory> semanticMemories = List.of();
         return new MemoryContext(
                 values,
@@ -602,6 +738,7 @@ public class MemoryRetrievalService {
                 decisions,
                 relationships,
                 fears,
+                coreProfiles,
                 semanticMemories,
                 new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0, 0, null, vectorAvailable, degraded),
                 buildPromptContext(
@@ -610,6 +747,7 @@ public class MemoryRetrievalService {
                         decisions,
                         relationships,
                         fears,
+                        coreProfiles,
                         semanticMemories,
                         intentService.plan("")));
     }

@@ -8,6 +8,7 @@ public record MemoryContext(
         List<DecisionMemory> decisions,
         List<RelationshipMemory> relationships,
         List<ProfileMemory> fears,
+        List<ProfileMemory> coreProfiles,
         List<SemanticMemory> semanticMemories,
         RetrievalMetrics metrics,
         String promptContext) {
@@ -18,6 +19,7 @@ public record MemoryContext(
         decisions = List.copyOf(decisions);
         relationships = List.copyOf(relationships);
         fears = List.copyOf(fears);
+        coreProfiles = List.copyOf(coreProfiles);
         semanticMemories = List.copyOf(semanticMemories);
     }
 

@@ -11,6 +11,7 @@ public class MemoryRetrievalProperties {
     private double semanticSimilarityThreshold = 0.3;
     private int semanticTypeQuota = 2;
     private Decision decision = new Decision();
+    private Core core = new Core();
 
     public int getSectionLimit() {
         return sectionLimit;
@@ -60,6 +61,14 @@ public class MemoryRetrievalProperties {
         this.decision = decision == null ? new Decision() : decision;
     }
 
+    public Core getCore() {
+        return core;
+    }
+
+    public void setCore(Core core) {
+        this.core = core == null ? new Core() : core;
+    }
+
     public int sectionLimit() {
         return Math.max(1, sectionLimit);
     }
@@ -83,6 +92,74 @@ public class MemoryRetrievalProperties {
 
     public Decision decision() {
         return decision == null ? new Decision() : decision;
+    }
+
+    /** 核心稳定画像（Core Memory）配置。 */
+    public Core core() {
+        return core == null ? new Core() : core;
+    }
+
+    public static class Core {
+
+        /** 进入核心稳定画像的置信度门槛。 */
+        private double confidenceThreshold = 0.85;
+
+        /** 核心价值观最多恒定注入条数。 */
+        private int valueLimit = 3;
+
+        /** 核心恐惧/边界最多恒定注入条数。 */
+        private int fearLimit = 2;
+
+        /** 核心稳定画像总条数上限。 */
+        private int totalLimit = 5;
+
+        public double getConfidenceThreshold() {
+            return confidenceThreshold;
+        }
+
+        public void setConfidenceThreshold(double confidenceThreshold) {
+            this.confidenceThreshold = confidenceThreshold;
+        }
+
+        public int getValueLimit() {
+            return valueLimit;
+        }
+
+        public void setValueLimit(int valueLimit) {
+            this.valueLimit = valueLimit;
+        }
+
+        public int getFearLimit() {
+            return fearLimit;
+        }
+
+        public void setFearLimit(int fearLimit) {
+            this.fearLimit = fearLimit;
+        }
+
+        public int getTotalLimit() {
+            return totalLimit;
+        }
+
+        public void setTotalLimit(int totalLimit) {
+            this.totalLimit = totalLimit;
+        }
+
+        public double confidenceThreshold() {
+            return Math.max(0.0, Math.min(1.0, confidenceThreshold));
+        }
+
+        public int valueLimit() {
+            return Math.max(0, valueLimit);
+        }
+
+        public int fearLimit() {
+            return Math.max(0, fearLimit);
+        }
+
+        public int totalLimit() {
+            return Math.max(1, totalLimit);
+        }
     }
 
     public int normalizeSemanticTopK(Integer topK) {

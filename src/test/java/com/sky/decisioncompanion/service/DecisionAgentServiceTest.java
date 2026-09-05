@@ -64,8 +64,9 @@ class DecisionAgentServiceTest {
                 .thenReturn(conversation);
         when(profileAdvisorService.buildProfilePrompt(USER_ID, "我在纠结 offer"))
                 .thenReturn(new ProfileAdvisorService.ProfilePrompt(
-                        "用户价值观上下文",
-                        memoryContext(2, 0.82)));
+                        "稳定画像系统上下文",
+                        memoryContext(2, 0.82),
+                        "易变召回块"));
 
         service = new DecisionAgentService(
                 builder,
@@ -88,17 +89,22 @@ class DecisionAgentServiceTest {
     }
 
     @Test
-    void chatPlacesProfileToolRulesInSystemRoleAndKeepsUserMessageClean() {
+    void chatPlacesProfileToolRulesInSystemRoleAndPrependsVolatileContextToUserMessage() {
         service.chat(USER_ID, null, "我在纠结 offer");
 
         ArgumentCaptor<String> systemCaptor = ArgumentCaptor.forClass(String.class);
         verify(requestSpec).system(systemCaptor.capture());
         String systemPrompt = systemCaptor.getValue();
 
-        assertThat(systemPrompt).contains("用户价值观上下文");
+        // 稳定块（system）与易变块（user）分层组装
+        assertThat(systemPrompt).contains("稳定画像系统上下文");
         assertThat(systemPrompt).contains("必须先调用 updateUserProfile");
         assertThat(systemPrompt).contains("长期稳定偏好");
-        verify(requestSpec).user("我在纠结 offer");
+        assertThat(systemPrompt).doesNotContain("易变召回块");
+        // 易变块前置到 user message，用户原始消息保持其后
+        ArgumentCaptor<String> userCaptor = ArgumentCaptor.forClass(String.class);
+        verify(requestSpec).user(userCaptor.capture());
+        assertThat(userCaptor.getValue()).contains("易变召回块").contains("我在纠结 offer");
         assertThat(systemPrompt).doesNotContain("用户消息：我在纠结 offer");
     }
 
@@ -171,6 +177,7 @@ class DecisionAgentServiceTest {
 
     private MemoryContext memoryContext(int semanticHitCount, Double maxSemanticScore) {
         return new MemoryContext(
+                List.of(),
                 List.of(),
                 List.of(),
                 List.of(),

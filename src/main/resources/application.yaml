@@ -44,6 +44,11 @@ decision-companion:
       semantic-top-k: 5
       semantic-similarity-threshold: 0.3
       semantic-type-quota: 2
+      core:
+        confidence-threshold: 0.85
+        value-limit: 3
+        fear-limit: 2
+        total-limit: 5
       decision:
         default-limit: 3
         max-limit: 5

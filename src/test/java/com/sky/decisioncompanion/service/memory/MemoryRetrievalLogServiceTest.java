@@ -94,6 +94,7 @@ class MemoryRetrievalLogServiceTest {
                 List.of(new MemoryContext.DecisionMemory("毕业 offer", "暂缓接受", "距离太远", "", null)),
                 List.of(new MemoryContext.RelationshipMemory("妈妈", "母亲", "高", "安全稳定", "")),
                 List.of(new MemoryContext.ProfileMemory("fear", "害怕离家太远", "", 0.8)),
+                List.of(),
                 semanticMemories,
                 new MemoryContext.RetrievalMetrics(1, 1, 1, 1, 1,
                         semanticMemories.size(), 0.82, true, false),

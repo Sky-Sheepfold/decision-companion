@@ -13,6 +13,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 
 import java.util.LinkedHashMap;
@@ -64,7 +65,7 @@ public class DecisionAgentService {
         try {
             String reply = chatClient.prompt()
                     .system(profilePrompt.systemPrompt())
-                    .user(userMessage)
+                    .user(buildUserMessage(profilePrompt.volatileContext(), userMessage))
                     .tools(agentToolService)
                     .toolContext(toolContext(userId, conversation.getId(), userMessage, requestId,
                             profilePrompt.memoryContext()))
@@ -97,7 +98,7 @@ public class DecisionAgentService {
 
         Flux<String> content = chatClient.prompt()
                 .system(profilePrompt.systemPrompt())
-                .user(userMessage)
+                .user(buildUserMessage(profilePrompt.volatileContext(), userMessage))
                 .tools(agentToolService)
                 .toolContext(toolContext(userId, conversation.getId(), userMessage, requestId,
                         profilePrompt.memoryContext()))
@@ -119,7 +120,6 @@ public class DecisionAgentService {
     private ProfileAdvisorService.ProfilePrompt withProfileContext(Long userId, String userMessage) {
         ProfileAdvisorService.ProfilePrompt profilePrompt = profileAdvisorService.buildProfilePrompt(userId, userMessage);
         String systemPrompt = profilePrompt.systemPrompt() + """
-
                 【可用工具使用原则：】
                 当用户处于重大决策、复盘或多选项比较场景时，可以调用受控工具查询历史决策、长期语义记忆或生成决策矩阵。
                 如果系统提示词中已经有【相关场景记忆】，不要为了普通对话重复调用 searchSemanticMemory；只有需要更具体历史证据时才做二次精查。
@@ -131,11 +131,22 @@ public class DecisionAgentService {
                 不要基于模型猜测直接写入档案或决策记录。
                 单轮对话尽量只调用最必要的工具。
                 """;
-        return new ProfileAdvisorService.ProfilePrompt(systemPrompt, profilePrompt.memoryContext());
+        return new ProfileAdvisorService.ProfilePrompt(systemPrompt, profilePrompt.memoryContext(),
+                profilePrompt.volatileContext());
     }
 
     private String conversationMemoryId(Long userId, Long conversationId) {
         return "user:" + userId + ":conversation:" + conversationId;
+    }
+
+    /**
+     * 组装 user message：将易变（volatile）召回块前置到用户消息，稳定块已在 system prompt 中。
+     */
+    private String buildUserMessage(String volatileContext, String userMessage) {
+        if (StringUtils.hasText(volatileContext)) {
+            return volatileContext + "\n\n" + userMessage;
+        }
+        return userMessage;
     }
 
     private Map<String, Object> toolContext(
