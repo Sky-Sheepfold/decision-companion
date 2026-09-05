@@ -9,6 +9,7 @@ import com.sky.decisioncompanion.common.Result;
 import com.sky.decisioncompanion.model.*;
 import com.sky.decisioncompanion.repository.*;
 import com.sky.decisioncompanion.service.UserService;
+import com.sky.decisioncompanion.service.memory.MemoryInsightService;
 import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -41,6 +42,7 @@ public class ProfileController {
     private final ProfileRelationshipRepository relationshipRepository;
     private final ProfileFearRepository fearRepository;
     private final ProfileMemoryGovernanceService profileMemoryGovernanceService;
+    private final MemoryInsightService memoryInsightService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ProfileController(
@@ -50,7 +52,8 @@ public class ProfileController {
             ProfileEmotionRepository emotionRepository,
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
-            ProfileMemoryGovernanceService profileMemoryGovernanceService) {
+            ProfileMemoryGovernanceService profileMemoryGovernanceService,
+            MemoryInsightService memoryInsightService) {
         this.userService = userService;
         this.valuesRepository = valuesRepository;
         this.decisionRepository = decisionRepository;
@@ -58,6 +61,7 @@ public class ProfileController {
         this.relationshipRepository = relationshipRepository;
         this.fearRepository = fearRepository;
         this.profileMemoryGovernanceService = profileMemoryGovernanceService;
+        this.memoryInsightService = memoryInsightService;
     }
 
     @GetMapping
@@ -121,6 +125,25 @@ public class ProfileController {
     @Operation(summary = "获取画像记忆治理审计日志", description = "返回当前用户画像记忆确认、拒绝、修正和删除日志")
     public ResponseEntity<Result<List<ProfileMemoryAuditLog>>> listMemoryAudits(@RequestParam(required = false) Integer limit) {
         return ResponseEntity.ok(Result.success(profileMemoryGovernanceService.listAuditLogs(currentUserId(), limit)));
+    }
+
+    @GetMapping("/insights")
+    @Operation(summary = "获取行为动机洞察", description = "返回当前用户的行为动机洞察（含判定状态）")
+    public ResponseEntity<Result<Map<String, Object>>> listInsights() {
+        Long userId = currentUserId();
+        return ResponseEntity.ok(Result.success(Map.of(
+                "insights", memoryInsightService.listInsights(userId),
+                "unjudgedCount", memoryInsightService.countUnjudged(userId)
+        )));
+    }
+
+    @PostMapping("/insights/{id}/judge")
+    @Operation(summary = "判定行为动机洞察", description = "确认或否定一条行为动机洞察，确认后作为较可信理解沉淀")
+    public ResponseEntity<Result<MemoryInsight>> judgeInsight(
+            @PathVariable Long id,
+            @RequestBody InsightJudgeRequest request) {
+        return ResponseEntity.ok(Result.success(memoryInsightService.judge(
+                currentUserId(), id, request == null ? null : request.verdict())));
     }
 
     @PostMapping("/pending-memories/{id}/confirm")
@@ -302,5 +325,8 @@ public class ProfileController {
     }
 
     public record ProfileMemoryCorrectionRequest(String subject, String content, String detail, String reason) {
+    }
+
+    public record InsightJudgeRequest(String verdict) {
     }
 }

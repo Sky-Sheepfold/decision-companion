@@ -10,6 +10,7 @@ public class MemoryRetrievalProperties {
     private int semanticTopK = 5;
     private double semanticSimilarityThreshold = 0.3;
     private int semanticTypeQuota = 2;
+    private int insightLimit = 3;
     private Decision decision = new Decision();
     private Core core = new Core();
 
@@ -53,6 +54,14 @@ public class MemoryRetrievalProperties {
         this.semanticTypeQuota = semanticTypeQuota;
     }
 
+    public int getInsightLimit() {
+        return insightLimit;
+    }
+
+    public void setInsightLimit(int insightLimit) {
+        this.insightLimit = insightLimit;
+    }
+
     public Decision getDecision() {
         return decision;
     }
@@ -88,6 +97,11 @@ public class MemoryRetrievalProperties {
     /** 每类语义记忆最多返回多少条（0 表示不限），用于召回多样性。 */
     public int semanticTypeQuota() {
         return Math.max(0, semanticTypeQuota);
+    }
+
+    /** 注入 prompt 的最多行为动机洞察条数。 */
+    public int insightLimit() {
+        return Math.max(0, insightLimit);
     }
 
     public Decision decision() {

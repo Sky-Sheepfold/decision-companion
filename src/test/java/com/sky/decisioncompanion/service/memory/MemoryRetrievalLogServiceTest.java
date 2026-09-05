@@ -97,6 +97,7 @@ class MemoryRetrievalLogServiceTest {
                 List.of(),
                 semanticMemories,
                 List.of(),
+                List.of(),
                 new MemoryContext.RetrievalMetrics(1, 1, 1, 1, 1,
                         semanticMemories.size(), 0.82, true, false),
                 "长期记忆背景包");

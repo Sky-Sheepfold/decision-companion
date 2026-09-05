@@ -72,6 +72,16 @@ decision-companion:
       scheduled-interval-ms: 7200000
       max-users-per-run: 50
       top-limit: 5
+    insight:
+      enabled: true
+      window-days: 14
+      awareness-cap: 30
+      scheduled-interval-ms: 21600000
+      initial-delay-ms: 300000
+      max-users-per-run: 50
+      top-limit: 3
+      confirm-confidence-floor: 0.75
+      near-duplicate-threshold: 0.85
 
 sa-token:
   token-name: Authorization

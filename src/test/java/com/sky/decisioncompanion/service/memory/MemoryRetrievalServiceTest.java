@@ -28,8 +28,10 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,10 +67,14 @@ class MemoryRetrievalServiceTest {
     @Mock
     private MemoryAwarenessService awarenessService;
 
+    @Mock
+    private MemoryInsightService insightService;
+
     private MemoryRetrievalService service;
 
     @BeforeEach
     void setUp() {
+        lenient().when(insightService.findActive(any(), anyInt())).thenReturn(List.of());
         service = service(new MemoryRetrievalProperties(), vectorStore);
     }
 
@@ -456,7 +462,8 @@ class MemoryRetrievalServiceTest {
                 decisionRecallService,
                 retrievalLogService,
                 new MemoryRetrievalIntentService(properties),
-                awarenessService);
+                awarenessService,
+                insightService);
     }
 
     private ProfileValues value(String item, String preference, String confidence) {

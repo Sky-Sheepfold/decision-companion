@@ -27,6 +27,7 @@ public enum ResultCode {
     CONVERSATION_NOT_FOUND(40420, "会话不存在", HttpStatus.NOT_FOUND),
     PROFILE_MEMORY_NOT_FOUND(40430, "待确认记忆不存在", HttpStatus.NOT_FOUND),
     PROFILE_RECORD_NOT_FOUND(40431, "画像记录不存在", HttpStatus.NOT_FOUND),
+    MEMORY_INSIGHT_NOT_FOUND(40432, "行为动机洞察不存在", HttpStatus.NOT_FOUND),
 
     USERNAME_EXISTS(40901, "用户名已存在", HttpStatus.CONFLICT),
     ONBOARDING_COMPLETED(40910, "冷启动已完成", HttpStatus.CONFLICT),

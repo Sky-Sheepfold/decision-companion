@@ -233,6 +233,23 @@ CREATE TABLE IF NOT EXISTS memory_awareness (
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='近期觉察记忆';
 
+-- 行为动机洞察（Insight 层）：Awareness 观察之上的动机解释假设，回答"他为什么这样"
+CREATE TABLE IF NOT EXISTS memory_insight (
+    id                   BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id              BIGINT NOT NULL COMMENT '用户ID',
+    hypothesis           VARCHAR(500) NOT NULL COMMENT '行为动机假设',
+    evidence             VARCHAR(1000) COMMENT '支撑证据（Awareness 观察，JSON 数组）',
+    confidence           DECIMAL(3,2) COMMENT '置信度',
+    verdict              VARCHAR(20) NOT NULL DEFAULT '' COMMENT '用户判定：空=未判 / confirmed=已确认 / rejected=已否定',
+    source_awareness_ids VARCHAR(1000) COMMENT '来源觉察ID（证据链，逗号分隔）',
+    active               BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否有效（rejected 后为 false，保留审计）',
+    created_at           DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_insight_user_active (user_id, active),
+    INDEX idx_insight_user_verdict (user_id, verdict),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='行为动机洞察';
+
 -- 聊天会话
 CREATE TABLE IF NOT EXISTS chat_conversation (
     id            BIGINT PRIMARY KEY AUTO_INCREMENT,

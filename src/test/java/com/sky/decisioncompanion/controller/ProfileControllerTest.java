@@ -4,6 +4,7 @@ import cn.dev33.satoken.stp.StpUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sky.decisioncompanion.common.Result;
+import com.sky.decisioncompanion.model.MemoryInsight;
 import com.sky.decisioncompanion.model.ProfileDecision;
 import com.sky.decisioncompanion.model.ProfileEmotion;
 import com.sky.decisioncompanion.model.ProfileFear;
@@ -18,6 +19,7 @@ import com.sky.decisioncompanion.repository.ProfileFearRepository;
 import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import com.sky.decisioncompanion.service.UserService;
+import com.sky.decisioncompanion.service.memory.MemoryInsightService;
 import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
@@ -45,6 +47,7 @@ class ProfileControllerTest {
     private final ProfileRelationshipRepository relationshipRepository = mock(ProfileRelationshipRepository.class);
     private final ProfileFearRepository fearRepository = mock(ProfileFearRepository.class);
     private final ProfileMemoryGovernanceService governanceService = mock(ProfileMemoryGovernanceService.class);
+    private final MemoryInsightService memoryInsightService = mock(MemoryInsightService.class);
     private final ProfileController controller = new ProfileController(
             userService,
             valuesRepository,
@@ -52,7 +55,8 @@ class ProfileControllerTest {
             emotionRepository,
             relationshipRepository,
             fearRepository,
-            governanceService
+            governanceService,
+            memoryInsightService
     );
 
     @Test
@@ -270,6 +274,50 @@ class ProfileControllerTest {
 
             assertThat((List<?>) result.getData()).hasSize(1);
             verify(governanceService).listAuditLogs(USER_ID, 20);
+        }
+    }
+
+    @Test
+    void listInsightsUsesCurrentUserAndIncludesUnjudgedCount() {
+        MemoryInsight insight = new MemoryInsight();
+        insight.setId(1L);
+        insight.setUserId(USER_ID);
+        insight.setHypothesis("用户反复纠结可能源于害怕做错决定");
+        insight.setVerdict("");
+        when(memoryInsightService.listInsights(USER_ID)).thenReturn(List.of(insight));
+        when(memoryInsightService.countUnjudged(USER_ID)).thenReturn(1);
+
+        try (MockedStatic<StpUtil> stpUtil = mockStatic(StpUtil.class)) {
+            stpUtil.when(StpUtil::getLoginIdAsLong).thenReturn(USER_ID);
+
+            Result<?> result = controller.listInsights().getBody();
+            JsonNode data = objectMapper.valueToTree(result.getData());
+
+            assertThat(data.get("insights")).hasSize(1);
+            assertThat(data.get("insights").get(0).get("hypothesis").asText())
+                    .isEqualTo("用户反复纠结可能源于害怕做错决定");
+            assertThat(data.get("unjudgedCount").asInt()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void judgeInsightUsesCurrentUserAndVerdict() {
+        MemoryInsight judged = new MemoryInsight();
+        judged.setId(1L);
+        judged.setUserId(USER_ID);
+        judged.setHypothesis("用户反复纠结可能源于害怕做错决定");
+        judged.setVerdict("confirmed");
+        when(memoryInsightService.judge(USER_ID, 1L, "confirm")).thenReturn(judged);
+        ProfileController.InsightJudgeRequest request =
+                new ProfileController.InsightJudgeRequest("confirm");
+
+        try (MockedStatic<StpUtil> stpUtil = mockStatic(StpUtil.class)) {
+            stpUtil.when(StpUtil::getLoginIdAsLong).thenReturn(USER_ID);
+
+            Result<?> result = controller.judgeInsight(1L, request).getBody();
+
+            assertThat(result.getData()).isEqualTo(judged);
+            verify(memoryInsightService).judge(USER_ID, 1L, "confirm");
         }
     }
 

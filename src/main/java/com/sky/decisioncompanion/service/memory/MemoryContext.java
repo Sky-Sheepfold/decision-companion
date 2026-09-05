@@ -11,6 +11,7 @@ public record MemoryContext(
         List<ProfileMemory> coreProfiles,
         List<SemanticMemory> semanticMemories,
         List<AwarenessMemory> awareness,
+        List<InsightMemory> insights,
         RetrievalMetrics metrics,
         String promptContext) {
 
@@ -23,6 +24,7 @@ public record MemoryContext(
         coreProfiles = List.copyOf(coreProfiles);
         semanticMemories = List.copyOf(semanticMemories);
         awareness = List.copyOf(awareness);
+        insights = List.copyOf(insights);
     }
 
     public record ProfileMemory(String subject, String content, String detail, Double confidence) {
@@ -62,6 +64,14 @@ public record MemoryContext(
             String observation,
             String trend,
             String emotionGuess) {
+    }
+
+    /** 行为动机洞察（Insight）记忆：从 Awareness 观察提炼的动机解释假设，带用户判定状态。 */
+    public record InsightMemory(
+            String hypothesis,
+            String evidence,
+            Double confidence,
+            String verdict) {
     }
 
     public record RetrievalMetrics(

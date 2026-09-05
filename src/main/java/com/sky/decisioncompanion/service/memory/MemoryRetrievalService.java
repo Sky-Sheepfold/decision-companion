@@ -52,6 +52,7 @@ public class MemoryRetrievalService {
     private final MemoryRetrievalLogService retrievalLogService;
     private final MemoryRetrievalIntentService intentService;
     private final MemoryAwarenessService awarenessService;
+    private final MemoryInsightService insightService;
 
     public MemoryRetrievalService(
             ProfileValuesRepository valuesRepository,
@@ -64,7 +65,8 @@ public class MemoryRetrievalService {
             DecisionRecallService decisionRecallService,
             MemoryRetrievalLogService retrievalLogService,
             MemoryRetrievalIntentService intentService,
-            MemoryAwarenessService awarenessService) {
+            MemoryAwarenessService awarenessService,
+            MemoryInsightService insightService) {
         this.valuesRepository = valuesRepository;
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
@@ -76,6 +78,7 @@ public class MemoryRetrievalService {
         this.retrievalLogService = retrievalLogService;
         this.intentService = intentService;
         this.awarenessService = awarenessService;
+        this.insightService = insightService;
     }
 
     public MemoryContext retrieve(Long userId, String query) {
@@ -126,6 +129,22 @@ public class MemoryRetrievalService {
             logger.warn("近期觉察召回失败, userId: {}", userId, e);
         }
 
+        List<MemoryContext.InsightMemory> insights = List.of();
+        try {
+            insights = insightService.findActive(userId, properties.insightLimit())
+                    .stream()
+                    .map(insight -> new MemoryContext.InsightMemory(
+                            truncate(insight.getHypothesis()),
+                            truncate(insight.getEvidence()),
+                            toDouble(insight.getConfidence()),
+                            clean(insight.getVerdict())))
+                    .filter(memory -> StringUtils.hasText(memory.hypothesis()))
+                    .toList();
+        } catch (Exception e) {
+            degraded = true;
+            logger.warn("行为动机洞察召回失败, userId: {}", userId, e);
+        }
+
         SemanticSearchResult semanticResult = searchSemanticMemories(userId, query, plan, plan.semanticTopK());
         degraded = degraded || semanticResult.degraded();
 
@@ -138,6 +157,7 @@ public class MemoryRetrievalService {
                 coreProfiles,
                 semanticResult.memories(),
                 awareness,
+                insights,
                 plan);
         MemoryContext.RetrievalMetrics metrics = new MemoryContext.RetrievalMetrics(
                 values.size(),
@@ -151,10 +171,10 @@ public class MemoryRetrievalService {
                 degraded);
 
         logger.info("Memory RAG 召回完成, userId: {}, intent: {}, valueCount: {}, emotionCount: {}, decisionCount: {}, "
-                + "relationshipCount: {}, fearCount: {}, coreCount: {}, awarenessCount: {}, semanticHitCount: {}, "
-                + "maxSemanticScore: {}, degraded: {}",
+                + "relationshipCount: {}, fearCount: {}, coreCount: {}, awarenessCount: {}, insightCount: {}, "
+                + "semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
                 userId, plan.intent().code(), values.size(), emotions.size(), decisions.size(), relationships.size(),
-                fears.size(), coreProfiles.size(), awareness.size(), semanticResult.memories().size(),
+                fears.size(), coreProfiles.size(), awareness.size(), insights.size(), semanticResult.memories().size(),
                 semanticResult.maxScore(), degraded);
 
         MemoryContext context = new MemoryContext(
@@ -166,6 +186,7 @@ public class MemoryRetrievalService {
                 coreProfiles,
                 semanticResult.memories(),
                 awareness,
+                insights,
                 metrics,
                 promptContext);
         recordAutoRecall(userId, query, context, plan);
@@ -516,23 +537,56 @@ public class MemoryRetrievalService {
             List<MemoryContext.ProfileMemory> coreProfiles,
             List<MemoryContext.SemanticMemory> semanticMemories,
             List<MemoryContext.AwarenessMemory> awareness,
+            List<MemoryContext.InsightMemory> insights,
             MemoryRetrievalPlan plan) {
         Set<String> coreSubjects = coreSubjects(coreProfiles);
         String awarenessSection = formatAwarenessSection(awareness);
+        String insightSection = formatInsightSection(insights);
         String sections = plan.promptOrder()
                 .stream()
                 .map(section -> formatSection(
                         section, values, emotions, decisions, relationships, fears, semanticMemories, coreSubjects))
                 .collect(java.util.stream.Collectors.joining("\n\n"));
         String body = StringUtils.hasText(awarenessSection)
-                ? awarenessSection + "\n\n" + sections
-                : sections;
+                ? awarenessSection + "\n\n" + (StringUtils.hasText(insightSection) ? insightSection + "\n\n" : "") + sections
+                : (StringUtils.hasText(insightSection) ? insightSection + "\n\n" : "") + sections;
         return """
                 以下是系统检索到的用户长期记忆，仅作为参考，不代表用户当前最终意愿。
                 结构化画像表示较稳定的长期结论；相关场景记忆表示相似经历和证据补充，不要把场景记忆当作新的画像结论。
 
                 %s
                 """.formatted(body);
+    }
+
+    /** 渲染【行为动机洞察】假设层：从近期觉察提炼的动机解释，标注入置信度与用户判定，需对话中验证。 */
+    private String formatInsightSection(List<MemoryContext.InsightMemory> insights) {
+        if (insights == null || insights.isEmpty()) {
+            return "";
+        }
+        String lines = insights.stream()
+                .limit(properties.insightLimit())
+                .map(memory -> {
+                    String line = "- " + clean(memory.hypothesis());
+                    List<String> marks = new ArrayList<>();
+                    if ("confirmed".equals(clean(memory.verdict()))) {
+                        marks.add("已确认");
+                    } else if ("rejected".equals(clean(memory.verdict()))) {
+                        marks.add("已否定");
+                    } else {
+                        marks.add("待验证");
+                    }
+                    if (memory.confidence() != null) {
+                        marks.add("置信度 " + formatScore(memory.confidence()));
+                    }
+                    if (!marks.isEmpty()) {
+                        line += "（" + String.join("，", marks) + "）";
+                    }
+                    return line;
+                })
+                .toList()
+                .stream()
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return "【行为动机洞察（解释假设，需结合对话验证，勿当作既定事实）】\n" + lines;
     }
 
     /** 渲染【近期动态】近因层：最近一段时间的觉察观察。 */
@@ -784,6 +838,7 @@ public class MemoryRetrievalService {
         List<MemoryContext.ProfileMemory> coreProfiles = List.of();
         List<MemoryContext.SemanticMemory> semanticMemories = List.of();
         List<MemoryContext.AwarenessMemory> awareness = List.of();
+        List<MemoryContext.InsightMemory> insights = List.of();
         return new MemoryContext(
                 values,
                 emotions,
@@ -793,6 +848,7 @@ public class MemoryRetrievalService {
                 coreProfiles,
                 semanticMemories,
                 awareness,
+                insights,
                 new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0, 0, null, vectorAvailable, degraded),
                 buildPromptContext(
                         values,
@@ -803,6 +859,7 @@ public class MemoryRetrievalService {
                         coreProfiles,
                         semanticMemories,
                         awareness,
+                        insights,
                         intentService.plan("")));
     }
 

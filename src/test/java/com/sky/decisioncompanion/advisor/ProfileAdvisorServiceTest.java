@@ -57,6 +57,7 @@ class ProfileAdvisorServiceTest {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
                 new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0, 0, null, true, false),
                 promptContext);
     }
