@@ -344,6 +344,27 @@ class MemoryRetrievalServiceTest {
     }
 
     @Test
+    void searchSemanticMemoriesAppliesTypeQuotaForDiversity() {
+        MemoryRetrievalProperties properties = new MemoryRetrievalProperties();
+        properties.setSemanticTypeQuota(1);
+        service = service(properties, vectorStore);
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                semanticDocument("doc-value-1", "价值观片段A", "value", 0.95, 0.95, 1),
+                semanticDocument("doc-value-2", "价值观片段B", "value", 0.93, 0.90, 2),
+                semanticDocument("doc-value-3", "价值观片段C", "value", 0.90, 0.88, 3),
+                semanticDocument("doc-fear-1", "恐惧片段", "fear", 0.85, 0.80, 4)));
+        when(sceneMemoryLinkRepository.selectOne(any())).thenReturn(null, null, null, null);
+
+        MemoryRetrievalService.SemanticSearchResult result = service.searchSemanticMemories(USER_ID, "query", 3);
+
+        // 同类 value 只保留 1 条，避免同一类记忆刷屏；配额用尽后不再强行补满 topK
+        assertThat(result.memories()).extracting(MemoryContext.SemanticMemory::content)
+                .containsExactly("价值观片段A", "恐惧片段");
+        assertThat(result.memories()).extracting(MemoryContext.SemanticMemory::type)
+                .containsExactly("value", "fear");
+    }
+
+    @Test
     void searchSemanticMemoriesOmitsInactiveLinkedSceneMemories() {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
                 Document.builder().id("doc-deleted").text("已删除场景").score(0.9).build(),

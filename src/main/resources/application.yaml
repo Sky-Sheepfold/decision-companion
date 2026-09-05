@@ -43,11 +43,23 @@ decision-companion:
       text-max-length: 200
       semantic-top-k: 5
       semantic-similarity-threshold: 0.3
+      semantic-type-quota: 2
       decision:
         default-limit: 3
         max-limit: 5
         candidate-multiplier: 3
         min-token-length: 2
+    extract:
+      enabled: true
+      concurrency: 3
+      poll-interval-ms: 5000
+      orphan-recover-ms: 60000
+      batch-size: 10
+      max-attempts: 5
+      orphan-timeout-minutes: 30
+      retry-delay-ms: 15000
+    posture-gate:
+      mode: off
 
 sa-token:
   token-name: Authorization

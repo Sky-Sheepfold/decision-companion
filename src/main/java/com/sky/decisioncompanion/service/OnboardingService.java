@@ -25,7 +25,7 @@ public class OnboardingService {
     private static final String STATUS_SKIPPED = "skipped";
 
     private final UserService userService;
-    private final ProfileExtractService profileExtractService;
+    private final ProfileExtractJobService profileExtractJobService;
     private final OnboardingProgressRepository progressRepository;
 
     private static final List<OnboardingQuestion> QUESTIONS = List.of(
@@ -38,10 +38,10 @@ public class OnboardingService {
 
     public OnboardingService(
             UserService userService,
-            ProfileExtractService profileExtractService,
+            ProfileExtractJobService profileExtractJobService,
             OnboardingProgressRepository progressRepository) {
         this.userService = userService;
-        this.profileExtractService = profileExtractService;
+        this.profileExtractJobService = profileExtractJobService;
         this.progressRepository = progressRepository;
     }
 
@@ -131,10 +131,10 @@ public class OnboardingService {
         }
 
         try {
-            logger.info("冷启动完成，触发初始画像提炼, userId: {}, materialLength: {}", userId, material.length());
-            profileExtractService.extractAndSave(userId, material, "");
+            logger.info("冷启动完成，提交初始画像提炼任务, userId: {}, materialLength: {}", userId, material.length());
+            profileExtractJobService.submit(userId, null, material, "", "onboarding");
         } catch (Exception e) {
-            logger.warn("冷启动初始画像提炼触发失败, userId: {}", userId, e);
+            logger.warn("冷启动初始画像提炼任务提交失败, userId: {}", userId, e);
         }
     }
 

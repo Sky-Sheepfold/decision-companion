@@ -9,6 +9,7 @@ public class MemoryRetrievalProperties {
     private int textMaxLength = 200;
     private int semanticTopK = 5;
     private double semanticSimilarityThreshold = 0.3;
+    private int semanticTypeQuota = 2;
     private Decision decision = new Decision();
 
     public int getSectionLimit() {
@@ -43,6 +44,14 @@ public class MemoryRetrievalProperties {
         this.semanticSimilarityThreshold = semanticSimilarityThreshold;
     }
 
+    public int getSemanticTypeQuota() {
+        return semanticTypeQuota;
+    }
+
+    public void setSemanticTypeQuota(int semanticTypeQuota) {
+        this.semanticTypeQuota = semanticTypeQuota;
+    }
+
     public Decision getDecision() {
         return decision;
     }
@@ -65,6 +74,11 @@ public class MemoryRetrievalProperties {
 
     public double semanticSimilarityThreshold() {
         return Math.max(0.0, Math.min(1.0, semanticSimilarityThreshold));
+    }
+
+    /** 每类语义记忆最多返回多少条（0 表示不限），用于召回多样性。 */
+    public int semanticTypeQuota() {
+        return Math.max(0, semanticTypeQuota);
     }
 
     public Decision decision() {

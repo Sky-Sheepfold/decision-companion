@@ -56,6 +56,14 @@ public final class ProfileWritePolicy {
         return "fear".equals(profileType) || "boundary".equals(profileType);
     }
 
+    /**
+     * 深层画像：价值观 / 恐惧 / 边界。深层画像不应被普通对话轻易直接改写，
+     * 默认进候选确认，或经 PostureGate 门控后写入。
+     */
+    public static boolean isDeep(String profileType) {
+        return "value".equals(profileType) || "fear".equals(profileType) || "boundary".equals(profileType);
+    }
+
     public record Decision(boolean writable, String action, String message, String logSummary) {
     }
 }

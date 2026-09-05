@@ -13,12 +13,13 @@ import com.sky.decisioncompanion.service.profile.ProfileAnalysisParser.Analysis;
 import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService;
 import com.sky.decisioncompanion.service.profile.ProfileWritePolicy;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
+import com.sky.decisioncompanion.service.profile.PostureGateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -33,10 +34,16 @@ public class ProfileExtractService {
     private static final List<String> DECISION_KEYWORDS = List.of(
             "决定", "决策", "选择", "纠结", "要不要", "offer", "离职", "转行", "工作", "城市", "学校");
 
+    /** 分治重试的最大深度（每次对半拆分）。 */
+    private static final int MAX_SPLIT_DEPTH = 2;
+    /** 只有输入达到该长度才值得对半拆分重试。 */
+    private static final int SPLIT_MIN_LENGTH = 400;
+
     private final ChatClient chatClient;
     private final ProfileDecisionRepository decisionRepository;
     private final ProfileMemoryGovernanceService profileMemoryGovernanceService;
     private final ProfileAnalysisParser analysisParser;
+    private final PostureGateService postureGateService;
 
     public ProfileExtractService(
             ChatClient.Builder chatClientBuilder,
@@ -46,32 +53,101 @@ public class ProfileExtractService {
             ProfileRelationshipRepository relationshipRepository,
             ProfileFearRepository fearRepository,
             ProfileSceneMemoryService profileSceneMemoryService,
-            ProfileMemoryGovernanceService profileMemoryGovernanceService) {
+            ProfileMemoryGovernanceService profileMemoryGovernanceService,
+            PostureGateService postureGateService) {
         this.chatClient = chatClientBuilder.build();
         this.decisionRepository = decisionRepository;
         this.profileMemoryGovernanceService = profileMemoryGovernanceService;
         this.analysisParser = new ProfileAnalysisParser();
+        this.postureGateService = postureGateService;
     }
 
-    @Async
-    public void extractAndSave(Long userId, String userMessage, String aiResponse) {
+    /**
+     * 同步执行一次档案提炼（由 {@link ProfileExtractJobService} 的任务 Worker 调用）。
+     *
+     * <p>LLM 调用失败向上抛出，交由任务队列分级退避重试；模型输出不可解析时先严格模式重试一次，
+     * 仍失败且输入较长则按句对半拆分递归提炼（分治重试），避免整轮丢失。
+     */
+    public int extractAndSave(Long userId, String userMessage, String aiResponse) {
         if (userId == null) {
             logger.warn("跳过档案提炼：userId 为空");
-            return;
+            return 0;
+        }
+        return extractRecursively(userId, userMessage, aiResponse, 0);
+    }
+
+    private int extractRecursively(Long userId, String userMessage, String aiResponse, int depth) {
+        String analysis = callExtraction(userMessage, aiResponse);
+        if (isParsed(analysis)) {
+            return saveAndLog(userId, userMessage, analysis);
+        }
+        if (depth >= MAX_SPLIT_DEPTH) {
+            logger.warn("档案提炼多次不可解析，放弃, userId: {}, depth: {}", userId, depth);
+            return 0;
         }
 
-        try {
-            String analysisPrompt = buildAnalysisPrompt(userMessage, aiResponse);
-            String analysis = chatClient.prompt()
-                    .messages(new UserMessage(analysisPrompt))
-                    .call()
-                    .content();
-
-            int savedCount = saveAnalysis(userId, userMessage, analysis);
-            logger.info("档案提炼完成, userId: {}, savedCount: {}", userId, savedCount);
-        } catch (Exception e) {
-            logger.error("档案提炼失败, userId: {}", userId, e);
+        logger.warn("档案提炼输出不可解析，尝试严格模式重试, userId: {}, depth: {}", userId, depth);
+        String strictAnalysis = callExtractionStrict(userMessage, aiResponse);
+        if (isParsed(strictAnalysis)) {
+            return saveAndLog(userId, userMessage, strictAnalysis);
         }
+
+        String combined = (defaultIfBlank(userMessage, "") + "\n\n" + defaultIfBlank(aiResponse, "")).trim();
+        if (combined.length() < SPLIT_MIN_LENGTH) {
+            logger.warn("档案提炼内容过短且不可解析，放弃, userId: {}", userId);
+            return 0;
+        }
+        int splitPoint = sentenceSplitPoint(combined);
+        if (splitPoint <= 0) {
+            return 0;
+        }
+        logger.warn("档案提炼输入过长，按句拆分重试, userId: {}, depth: {}", userId, depth + 1);
+        String first = combined.substring(0, splitPoint);
+        String second = combined.substring(splitPoint);
+        int saved = 0;
+        saved += extractRecursively(userId, first, "", depth + 1);
+        saved += extractRecursively(userId, second, "", depth + 1);
+        return saved;
+    }
+
+    private int saveAndLog(Long userId, String userMessage, String analysis) {
+        int saved = saveAnalysis(userId, userMessage, analysis);
+        logger.info("档案提炼完成, userId: {}, savedCount: {}", userId, saved);
+        return saved;
+    }
+
+    private boolean isParsed(String analysis) {
+        return StringUtils.hasText(analysis) && analysisParser.parse(analysis).parsed();
+    }
+
+    private String callExtraction(String userMessage, String aiResponse) {
+        String prompt = buildAnalysisPrompt(userMessage, aiResponse);
+        return chatClient.prompt().messages(new UserMessage(prompt)).call().content();
+    }
+
+    private String callExtractionStrict(String userMessage, String aiResponse) {
+        String prompt = buildAnalysisPrompt(userMessage, aiResponse)
+                + "\n\n注意：你必须只输出一个合法的 JSON 对象。任何额外的解释文字、Markdown 围栏或换行都可能导致解析失败，禁止输出其他内容。";
+        return chatClient.prompt().messages(new UserMessage(prompt)).call().content();
+    }
+
+    /** 在文本中段附近寻找最后一个句子结束符（。！？或换行），返回切割点下标，找不到返回 -1。 */
+    private int sentenceSplitPoint(String text) {
+        int middle = text.length() / 2;
+        int searchFrom = Math.max(0, middle - 200);
+        int searchTo = Math.min(text.length(), middle + 200);
+        String segment = text.substring(searchFrom, searchTo);
+        int lastSentenceEnd = -1;
+        for (int i = 0; i < segment.length(); i++) {
+            char c = segment.charAt(i);
+            if (c == '。' || c == '！' || c == '？' || c == '\n') {
+                lastSentenceEnd = i;
+            }
+        }
+        if (lastSentenceEnd < 0) {
+            return -1;
+        }
+        return searchFrom + lastSentenceEnd + 1;
     }
 
     private String buildAnalysisPrompt(String userMessage, String aiResponse) {
@@ -289,6 +365,27 @@ public class ProfileExtractService {
             return 0;
         }
         if ("written".equals(decision.action())) {
+            // 深层画像门控：enforce 模式下由 LLM 裁判决定是否直接写入，拦截则降级为候选
+            if (postureGateService.shouldGate(profileType)) {
+                PostureGateService.GateVerdict verdict = postureGateService.evaluate(
+                        userId, profileType, subject, content, evidence, confidence);
+                if (!verdict.accepted()) {
+                    profileMemoryGovernanceService.createCandidate(
+                            new ProfileMemoryGovernanceService.MemoryCandidateCommand(
+                                    userId,
+                                    profileType,
+                                    subject,
+                                    content,
+                                    detail,
+                                    confidence,
+                                    evidence,
+                                    "profile_extract",
+                                    null));
+                    logger.info("深层画像被门控降级为候选, userId: {}, profileType: {}, subject: {}, action: {}",
+                            userId, profileType, subject, verdict.action());
+                    return 0;
+                }
+            }
             ProfileMemoryGovernanceService.GovernanceResult result =
                     profileMemoryGovernanceService.writeConfirmedMemory(
                             new ProfileMemoryGovernanceService.ConfirmedMemoryCommand(

@@ -28,8 +28,10 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 @Service
@@ -168,13 +170,15 @@ public class MemoryRetrievalService {
                     .filter(Objects::nonNull)
                     .max(Double::compareTo)
                     .orElse(null);
-            List<MemoryContext.SemanticMemory> memories = chooseRerankPool(candidates, plan, safeResultTopK)
+            List<SemanticCandidate> ranked = chooseRerankPool(candidates, plan, safeResultTopK)
                     .stream()
                     .sorted(Comparator
                             .<SemanticCandidate>comparingDouble(candidate -> candidate.rerankScore().score())
                             .reversed()
                             .thenComparingInt(SemanticCandidate::originalIndex))
-                    .limit(safeResultTopK)
+                    .toList();
+            List<MemoryContext.SemanticMemory> memories = applyTypeQuota(ranked, safeResultTopK)
+                    .stream()
                     .map(this::toSemanticMemory)
                     .filter(memory -> StringUtils.hasText(memory.content()))
                     .toList();
@@ -215,6 +219,34 @@ public class MemoryRetrievalService {
                 .filter(candidate -> isPreferredMemoryType(candidate.document(), plan))
                 .toList();
         return preferred.size() >= resultTopK ? preferred : candidates;
+    }
+
+    /**
+     * 召回多样性：按 memoryType 每类最多保留 {@code semanticTypeQuota} 条，避免同一类记忆刷屏。
+     * 类型缺失（无 metadata）不参与配额；配额 0 表示不限。
+     */
+    private List<SemanticCandidate> applyTypeQuota(List<SemanticCandidate> ranked, int resultTopK) {
+        int quota = properties.semanticTypeQuota();
+        if (quota <= 0 || ranked.size() <= resultTopK) {
+            return ranked;
+        }
+        Map<String, Integer> typeCounts = new HashMap<>();
+        List<SemanticCandidate> result = new ArrayList<>();
+        for (SemanticCandidate candidate : ranked) {
+            String type = memoryType(candidate.document());
+            boolean countable = StringUtils.hasText(type);
+            int count = typeCounts.getOrDefault(type, 0);
+            if (!countable || count < quota) {
+                result.add(candidate);
+                if (countable) {
+                    typeCounts.put(type, count + 1);
+                }
+            }
+            if (result.size() >= resultTopK) {
+                break;
+            }
+        }
+        return result;
     }
 
     private List<MemoryContext.ProfileMemory> getValues(Long userId, int limit) {

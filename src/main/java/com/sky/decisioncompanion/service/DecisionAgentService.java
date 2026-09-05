@@ -26,7 +26,7 @@ public class DecisionAgentService {
 
     private final ChatClient chatClient;
     private final ProfileAdvisorService profileAdvisorService;
-    private final ProfileExtractService profileExtractService;
+    private final ProfileExtractJobService profileExtractJobService;
     private final ConversationHistoryService conversationHistoryService;
     private final DecisionAgentToolService agentToolService;
     private final AgentToolInvocationTracker toolInvocationTracker;
@@ -35,7 +35,7 @@ public class DecisionAgentService {
             ChatClient.Builder builder,
             ChatMemory chatMemory,
             ProfileAdvisorService profileAdvisorService,
-            ProfileExtractService profileExtractService,
+            ProfileExtractJobService profileExtractJobService,
             ConversationHistoryService conversationHistoryService,
             DecisionAgentToolService agentToolService,
             AgentToolInvocationTracker toolInvocationTracker) {
@@ -43,7 +43,7 @@ public class DecisionAgentService {
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
         this.profileAdvisorService = profileAdvisorService;
-        this.profileExtractService = profileExtractService;
+        this.profileExtractJobService = profileExtractJobService;
         this.conversationHistoryService = conversationHistoryService;
         this.agentToolService = agentToolService;
         this.toolInvocationTracker = toolInvocationTracker;
@@ -74,7 +74,7 @@ public class DecisionAgentService {
 
             logProfileToolInvocationState(userId, conversation.getId(), requestId, userMessage);
             conversationHistoryService.saveMessage(userId, conversation.getId(), "assistant", reply);
-            profileExtractService.extractAndSave(userId, userMessage, reply);
+            profileExtractJobService.submit(userId, conversation.getId(), userMessage, reply, "chat");
 
             return new ChatResponse(conversation.getId(), reply);
         } finally {
@@ -109,7 +109,7 @@ public class DecisionAgentService {
                     String reply = replyBuilder.toString();
                     logProfileToolInvocationState(userId, conversation.getId(), requestId, userMessage);
                     conversationHistoryService.saveMessage(userId, conversation.getId(), "assistant", reply);
-                    profileExtractService.extractAndSave(userId, userMessage, reply);
+                    profileExtractJobService.submit(userId, conversation.getId(), userMessage, reply, "chat");
                 })
                 .doFinally(signalType -> toolInvocationTracker.clear(requestId));
 

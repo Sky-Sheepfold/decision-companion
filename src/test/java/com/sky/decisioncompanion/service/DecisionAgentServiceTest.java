@@ -30,7 +30,7 @@ class DecisionAgentServiceTest {
     private final ChatClient.Builder builder = mock(ChatClient.Builder.class);
     private final ChatMemory chatMemory = mock(ChatMemory.class);
     private final ProfileAdvisorService profileAdvisorService = mock(ProfileAdvisorService.class);
-    private final ProfileExtractService profileExtractService = mock(ProfileExtractService.class);
+    private final ProfileExtractJobService profileExtractJobService = mock(ProfileExtractJobService.class);
     private final ConversationHistoryService conversationHistoryService = mock(ConversationHistoryService.class);
     private final DecisionAgentToolService toolService = mock(DecisionAgentToolService.class);
     private final com.sky.decisioncompanion.service.agenttool.AgentToolInvocationTracker toolInvocationTracker =
@@ -71,7 +71,7 @@ class DecisionAgentServiceTest {
                 builder,
                 chatMemory,
                 profileAdvisorService,
-                profileExtractService,
+                profileExtractJobService,
                 conversationHistoryService,
                 toolService,
                 toolInvocationTracker);
@@ -106,7 +106,7 @@ class DecisionAgentServiceTest {
     void chatRunsPostChatProfileExtractionAsComplement() {
         service.chat(USER_ID, null, "我在纠结 offer");
 
-        verify(profileExtractService).extractAndSave(USER_ID, "我在纠结 offer", "我们先一起拆开看。");
+        verify(profileExtractJobService).submit(USER_ID, CONVERSATION_ID, "我在纠结 offer", "我们先一起拆开看。", "chat");
     }
 
     @Test
@@ -146,7 +146,7 @@ class DecisionAgentServiceTest {
 
         result.content().collectList().block();
 
-        verify(profileExtractService).extractAndSave(USER_ID, "我在纠结 offer", "我们看看");
+        verify(profileExtractJobService).submit(USER_ID, CONVERSATION_ID, "我在纠结 offer", "我们看看", "chat");
     }
 
     @SuppressWarnings("unchecked")

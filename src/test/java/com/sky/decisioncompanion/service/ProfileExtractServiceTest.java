@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -36,6 +37,12 @@ class ProfileExtractServiceTest {
 
     @Mock
     private ChatClient chatClient;
+
+    @Mock
+    private ChatClient.ChatClientRequestSpec requestSpec;
+
+    @Mock
+    private ChatClient.CallResponseSpec callResponseSpec;
 
     @Mock
     private ProfileValuesRepository valuesRepository;
@@ -57,6 +64,9 @@ class ProfileExtractServiceTest {
 
     @Mock
     private ProfileMemoryGovernanceService profileMemoryGovernanceService;
+
+    @Mock
+    private com.sky.decisioncompanion.service.profile.PostureGateService postureGateService;
 
     private ProfileExtractService service;
 
@@ -270,6 +280,84 @@ class ProfileExtractServiceTest {
         verifyNoInteractions(profileSceneMemoryService);
     }
 
+    @Test
+    void retriesStrictPromptWhenModelOutputIsUnparsable() {
+        when(chatClient.prompt()).thenReturn(requestSpec);
+        when(requestSpec.messages(any(org.springframework.ai.chat.messages.Message[].class))).thenReturn(requestSpec);
+        when(requestSpec.call()).thenReturn(callResponseSpec);
+        when(callResponseSpec.content())
+                .thenReturn("抱歉，这段我不太确定该怎么分析。")
+                .thenReturn("""
+                        {
+                          "values": [
+                            {
+                              "item": "稳定",
+                              "preference": "更想要稳定",
+                              "confidence": 0.9,
+                              "evidence": ["我更想要稳定"]
+                            }
+                          ]
+                        }
+                        """);
+        when(profileMemoryGovernanceService.writeConfirmedMemory(any()))
+                .thenReturn(new ProfileMemoryGovernanceService.GovernanceResult(
+                        true, "confirm", "value", 101L, null, "画像记忆已写入"));
+
+        int saved = service.extractAndSave(USER_ID, "我更想要稳定", "好的，我理解你的偏好");
+
+        assertThat(saved).isEqualTo(1);
+        verify(chatClient, times(2)).prompt();
+    }
+
+    @Test
+    void splitsLongUnparsableInputAndRecursivelyExtracts() {
+        when(chatClient.prompt()).thenReturn(requestSpec);
+        when(requestSpec.messages(any(org.springframework.ai.chat.messages.Message[].class))).thenReturn(requestSpec);
+        when(requestSpec.call()).thenReturn(callResponseSpec);
+        String longMessage = "第一段：我最近一直在纠结要不要接受外地的高薪 offer，离父母很远。"
+                + "第二段：妈妈很希望我留在本地，她说一家人在一起更重要。"
+                + "第三段：我自己其实很看重家庭和稳定，但又不想放弃职业成长的机会。"
+                + "第四段：最近压力很大，晚上经常睡不好，一直在反复权衡这两个选择。"
+                + "第五段：这份 offer 的平台更大，能接触更多项目，未来跳槽也更有竞争力。"
+                + "第六段：但我又很担心错过陪伴父母的时光，毕竟他们年纪越来越大，我希望能常回家看看。"
+                + "第七段：朋友说年轻应该拼一拼，可我心里总有个声音说稳定也很重要。"
+                + "第八段：我反复在想，到底什么样的选择才是我真正想要的，真的很纠结。"
+                + "第九段：如果选择去外地，我会很担心周末回不了家，父母有急事也帮不上忙，心里会很愧疚。"
+                + "第十段：但如果留在本地，又怕错过一次重要的成长机会，以后回想起来会不会后悔当初没有出去闯一闯。"
+                + "第十一段：我还想听听你的建议，结合我的情况，你觉得应该优先考虑家庭还是优先考虑职业发展呢。";
+        when(callResponseSpec.content())
+                .thenReturn("不可解析的输出")
+                .thenReturn("还是不可解析")
+                .thenReturn("""
+                        {"values": [{"item": "稳定", "preference": "更想要稳定", "confidence": 0.9, "evidence": ["更看重家庭"]}]}
+                        """)
+                .thenReturn("""
+                        {"relationships": [{"name": "妈妈", "role": "母亲", "influenceLevel": "高", "influenceStyle": "从家庭角度影响选择", "note": "更看重陪伴家人", "confidence": 0.9, "evidence": ["希望我留在本地"]}]}
+                        """);
+        when(profileMemoryGovernanceService.writeConfirmedMemory(any()))
+                .thenReturn(new ProfileMemoryGovernanceService.GovernanceResult(
+                        true, "confirm", "value", 101L, null, "画像记忆已写入"));
+
+        int saved = service.extractAndSave(USER_ID, longMessage, "好的，我理解你的纠结");
+
+        assertThat(saved).isEqualTo(2);
+        verify(chatClient, times(4)).prompt();
+    }
+
+    @Test
+    void givesUpShortUnparsableOutputWithoutExtraCalls() {
+        when(chatClient.prompt()).thenReturn(requestSpec);
+        when(requestSpec.messages(any(org.springframework.ai.chat.messages.Message[].class))).thenReturn(requestSpec);
+        when(requestSpec.call()).thenReturn(callResponseSpec);
+        when(callResponseSpec.content()).thenReturn("不可解析的输出", "还是不可解析");
+
+        int saved = service.extractAndSave(USER_ID, "你好", "你好");
+
+        assertThat(saved).isZero();
+        verify(chatClient, times(2)).prompt();
+        verifyNoInteractions(profileMemoryGovernanceService);
+    }
+
     private ProfileExtractService serviceWithSceneMemory(ProfileSceneMemoryService profileSceneMemoryService) {
         return new ProfileExtractService(
                 chatClientBuilder,
@@ -279,6 +367,7 @@ class ProfileExtractServiceTest {
                 relationshipRepository,
                 fearRepository,
                 profileSceneMemoryService,
-                profileMemoryGovernanceService);
+                profileMemoryGovernanceService,
+                postureGateService);
     }
 }

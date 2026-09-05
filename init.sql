@@ -193,6 +193,28 @@ CREATE TABLE IF NOT EXISTS profile_scene_memory_link (
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='画像记录与场景记忆向量关联';
 
+-- 档案提炼任务队列
+CREATE TABLE IF NOT EXISTS profile_extract_job (
+    id              BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id         BIGINT NOT NULL COMMENT '用户ID',
+    conversation_id BIGINT COMMENT '会话ID',
+    source          VARCHAR(30) NOT NULL DEFAULT 'chat' COMMENT '来源 chat/onboarding',
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态 pending/processing/success/failed',
+    claim_token     VARCHAR(64) COMMENT '认领令牌',
+    claimed_at      DATETIME COMMENT '认领时间',
+    attempts        INT NOT NULL DEFAULT 0 COMMENT '已尝试次数',
+    retry_at        DATETIME COMMENT '下次重试时间',
+    last_error      VARCHAR(500) COMMENT '最近错误',
+    user_message    MEDIUMTEXT COMMENT '用户消息',
+    ai_response     MEDIUMTEXT COMMENT 'AI回复',
+    saved_count     INT NOT NULL DEFAULT 0 COMMENT '成功写入画像条数',
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_extract_job_pending (status, retry_at, created_at),
+    INDEX idx_extract_job_user_created (user_id, created_at),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='档案提炼任务队列';
+
 -- 聊天会话
 CREATE TABLE IF NOT EXISTS chat_conversation (
     id            BIGINT PRIMARY KEY AUTO_INCREMENT,

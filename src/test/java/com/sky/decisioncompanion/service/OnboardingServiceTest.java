@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -34,7 +35,7 @@ class OnboardingServiceTest {
     private UserService userService;
 
     @Mock
-    private ProfileExtractService profileExtractService;
+    private ProfileExtractJobService profileExtractJobService;
 
     @Mock
     private OnboardingProgressRepository progressRepository;
@@ -69,7 +70,7 @@ class OnboardingServiceTest {
             return null;
         }).when(userService).markOnboarded(USER_ID);
 
-        onboardingService = new OnboardingService(userService, profileExtractService, progressRepository);
+        onboardingService = new OnboardingService(userService, profileExtractJobService, progressRepository);
     }
 
     @Test
@@ -106,11 +107,11 @@ class OnboardingServiceTest {
         assertThat(status.answeredSteps()).isEqualTo(1);
         assertThat(status.skippedSteps()).isZero();
         assertThat(progresses).singleElement().satisfies(progress -> {
-            assertThat(progress.getStatus()).isEqualTo("answered");
-            assertThat(progress.getAnswer()).isEqualTo("我叫小杨");
-            assertThat(progress.getReply()).isNull();
-        });
-        verifyNoInteractions(profileExtractService);
+                assertThat(progress.getStatus()).isEqualTo("answered");
+                assertThat(progress.getAnswer()).isEqualTo("我叫小杨");
+                assertThat(progress.getReply()).isNull();
+            });
+        verifyNoInteractions(profileExtractJobService);
     }
 
     @Test
@@ -129,7 +130,7 @@ class OnboardingServiceTest {
         verify(userService).markOnboarded(USER_ID);
 
         ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        verify(profileExtractService).extractAndSave(eq(USER_ID), messageCaptor.capture(), eq(""));
+        verify(profileExtractJobService).submit(eq(USER_ID), isNull(), messageCaptor.capture(), eq(""), eq("onboarding"));
         assertThat(messageCaptor.getValue())
                 .contains("先自我介绍一下吧", "我叫小杨")
                 .contains("什么对你来说最重要", "自由和稳定都很重要")
