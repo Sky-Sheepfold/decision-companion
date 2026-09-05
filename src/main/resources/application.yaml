@@ -65,6 +65,13 @@ decision-companion:
       retry-delay-ms: 15000
     posture-gate:
       mode: off
+    awareness:
+      enabled: true
+      window-days: 7
+      message-cap: 40
+      scheduled-interval-ms: 7200000
+      max-users-per-run: 50
+      top-limit: 5
 
 sa-token:
   token-name: Authorization

@@ -51,6 +51,7 @@ public class MemoryRetrievalService {
     private final DecisionRecallService decisionRecallService;
     private final MemoryRetrievalLogService retrievalLogService;
     private final MemoryRetrievalIntentService intentService;
+    private final MemoryAwarenessService awarenessService;
 
     public MemoryRetrievalService(
             ProfileValuesRepository valuesRepository,
@@ -62,7 +63,8 @@ public class MemoryRetrievalService {
             MemoryRetrievalProperties properties,
             DecisionRecallService decisionRecallService,
             MemoryRetrievalLogService retrievalLogService,
-            MemoryRetrievalIntentService intentService) {
+            MemoryRetrievalIntentService intentService,
+            MemoryAwarenessService awarenessService) {
         this.valuesRepository = valuesRepository;
         this.emotionRepository = emotionRepository;
         this.relationshipRepository = relationshipRepository;
@@ -73,6 +75,7 @@ public class MemoryRetrievalService {
         this.decisionRecallService = decisionRecallService;
         this.retrievalLogService = retrievalLogService;
         this.intentService = intentService;
+        this.awarenessService = awarenessService;
     }
 
     public MemoryContext retrieve(Long userId, String query) {
@@ -107,6 +110,22 @@ public class MemoryRetrievalService {
             logger.warn("核心稳定画像召回失败, userId: {}", userId, e);
         }
 
+        List<MemoryContext.AwarenessMemory> awareness = List.of();
+        try {
+            awareness = awarenessService.findRecent(userId, properties.core().totalLimit())
+                    .stream()
+                    .map(note -> new MemoryContext.AwarenessMemory(
+                            note.getAwareDate() == null ? "" : note.getAwareDate().toString(),
+                            truncate(note.getObservation()),
+                            truncate(note.getTrend()),
+                            truncate(note.getEmotionGuess())))
+                    .filter(memory -> StringUtils.hasText(memory.observation()))
+                    .toList();
+        } catch (Exception e) {
+            degraded = true;
+            logger.warn("近期觉察召回失败, userId: {}", userId, e);
+        }
+
         SemanticSearchResult semanticResult = searchSemanticMemories(userId, query, plan, plan.semanticTopK());
         degraded = degraded || semanticResult.degraded();
 
@@ -118,6 +137,7 @@ public class MemoryRetrievalService {
                 fears,
                 coreProfiles,
                 semanticResult.memories(),
+                awareness,
                 plan);
         MemoryContext.RetrievalMetrics metrics = new MemoryContext.RetrievalMetrics(
                 values.size(),
@@ -131,9 +151,11 @@ public class MemoryRetrievalService {
                 degraded);
 
         logger.info("Memory RAG 召回完成, userId: {}, intent: {}, valueCount: {}, emotionCount: {}, decisionCount: {}, "
-                + "relationshipCount: {}, fearCount: {}, coreCount: {}, semanticHitCount: {}, maxSemanticScore: {}, degraded: {}",
+                + "relationshipCount: {}, fearCount: {}, coreCount: {}, awarenessCount: {}, semanticHitCount: {}, "
+                + "maxSemanticScore: {}, degraded: {}",
                 userId, plan.intent().code(), values.size(), emotions.size(), decisions.size(), relationships.size(),
-                fears.size(), coreProfiles.size(), semanticResult.memories().size(), semanticResult.maxScore(), degraded);
+                fears.size(), coreProfiles.size(), awareness.size(), semanticResult.memories().size(),
+                semanticResult.maxScore(), degraded);
 
         MemoryContext context = new MemoryContext(
                 values,
@@ -143,6 +165,7 @@ public class MemoryRetrievalService {
                 fears,
                 coreProfiles,
                 semanticResult.memories(),
+                awareness,
                 metrics,
                 promptContext);
         recordAutoRecall(userId, query, context, plan);
@@ -481,7 +504,7 @@ public class MemoryRetrievalService {
     }
 
     /**
-     * 生成易变（volatile）召回块：仅含动态意图区块（已与核心画像去重），
+     * 生成易变（volatile）召回块：近期动态（Awareness）+ 动态意图区块（已与核心画像去重），
      * 供组装 user message 前置使用。核心稳定画像由 {@link #renderCoreSection} 单独渲染进 system prompt。
      */
     private String buildPromptContext(
@@ -492,19 +515,47 @@ public class MemoryRetrievalService {
             List<MemoryContext.ProfileMemory> fears,
             List<MemoryContext.ProfileMemory> coreProfiles,
             List<MemoryContext.SemanticMemory> semanticMemories,
+            List<MemoryContext.AwarenessMemory> awareness,
             MemoryRetrievalPlan plan) {
         Set<String> coreSubjects = coreSubjects(coreProfiles);
+        String awarenessSection = formatAwarenessSection(awareness);
         String sections = plan.promptOrder()
                 .stream()
                 .map(section -> formatSection(
                         section, values, emotions, decisions, relationships, fears, semanticMemories, coreSubjects))
                 .collect(java.util.stream.Collectors.joining("\n\n"));
+        String body = StringUtils.hasText(awarenessSection)
+                ? awarenessSection + "\n\n" + sections
+                : sections;
         return """
                 以下是系统检索到的用户长期记忆，仅作为参考，不代表用户当前最终意愿。
                 结构化画像表示较稳定的长期结论；相关场景记忆表示相似经历和证据补充，不要把场景记忆当作新的画像结论。
 
                 %s
-                """.formatted(sections);
+                """.formatted(body);
+    }
+
+    /** 渲染【近期动态】近因层：最近一段时间的觉察观察。 */
+    private String formatAwarenessSection(List<MemoryContext.AwarenessMemory> awareness) {
+        if (awareness.isEmpty()) {
+            return "";
+        }
+        String lines = awareness.stream()
+                .map(memory -> {
+                    String prefix = StringUtils.hasText(memory.date()) ? "[" + memory.date() + "] " : "";
+                    String line = prefix + clean(memory.observation());
+                    if (StringUtils.hasText(memory.trend())) {
+                        line += "（趋势：" + clean(memory.trend()) + "）";
+                    }
+                    if (StringUtils.hasText(memory.emotionGuess())) {
+                        line += "（情绪：" + clean(memory.emotionGuess()) + "）";
+                    }
+                    return "- " + line;
+                })
+                .toList()
+                .stream()
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return "【近期动态】\n" + lines;
     }
 
     /**
@@ -732,6 +783,7 @@ public class MemoryRetrievalService {
         List<MemoryContext.ProfileMemory> fears = List.of();
         List<MemoryContext.ProfileMemory> coreProfiles = List.of();
         List<MemoryContext.SemanticMemory> semanticMemories = List.of();
+        List<MemoryContext.AwarenessMemory> awareness = List.of();
         return new MemoryContext(
                 values,
                 emotions,
@@ -740,6 +792,7 @@ public class MemoryRetrievalService {
                 fears,
                 coreProfiles,
                 semanticMemories,
+                awareness,
                 new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0, 0, null, vectorAvailable, degraded),
                 buildPromptContext(
                         values,
@@ -749,6 +802,7 @@ public class MemoryRetrievalService {
                         fears,
                         coreProfiles,
                         semanticMemories,
+                        awareness,
                         intentService.plan("")));
     }
 

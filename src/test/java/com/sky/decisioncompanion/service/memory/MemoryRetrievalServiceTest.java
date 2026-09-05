@@ -1,6 +1,7 @@
 package com.sky.decisioncompanion.service.memory;
 
 import com.sky.decisioncompanion.config.MemoryRetrievalProperties;
+import com.sky.decisioncompanion.model.MemoryAwareness;
 import com.sky.decisioncompanion.model.ProfileEmotion;
 import com.sky.decisioncompanion.model.ProfileFear;
 import com.sky.decisioncompanion.model.ProfileRelationship;
@@ -60,6 +61,9 @@ class MemoryRetrievalServiceTest {
 
     @Mock
     private MemoryRetrievalLogService retrievalLogService;
+
+    @Mock
+    private MemoryAwarenessService awarenessService;
 
     private MemoryRetrievalService service;
 
@@ -181,6 +185,35 @@ class MemoryRetrievalServiceTest {
         // 易变块（volatile）与核心去重：不再重复展示已恒定注入的画像
         assertThat(context.promptContext()).doesNotContain("更看重家庭");
         assertThat(context.promptContext()).doesNotContain("害怕失控");
+    }
+
+    @Test
+    void retrieveInjectsRecentAwarenessIntoVolatileBlock() {
+        when(valuesRepository.selectList(any())).thenReturn(List.of());
+        when(emotionRepository.selectList(any())).thenReturn(List.of());
+        when(relationshipRepository.selectList(any())).thenReturn(List.of());
+        when(fearRepository.selectList(any())).thenReturn(List.of());
+        when(decisionRecallService.recall(USER_ID, "query", 3)).thenReturn(decisionResult());
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+        MemoryAwareness note = new MemoryAwareness();
+        note.setUserId(USER_ID);
+        note.setObservation("近期因决策压力睡眠不佳");
+        note.setTrend("持续焦虑");
+        note.setEmotionGuess("焦虑");
+        note.setAwareDate(java.time.LocalDate.parse("2026-09-05"));
+        note.setActive(true);
+        when(awarenessService.findRecent(USER_ID, 5)).thenReturn(List.of(note));
+
+        MemoryContext context = service.retrieve(USER_ID, "query");
+
+        // 近期动态（近因层）位于易变块最前
+        assertThat(context.promptContext()).contains("【近期动态】");
+        assertThat(context.promptContext().indexOf("【近期动态】"))
+                .isLessThan(context.promptContext().indexOf("【稳定价值观】"));
+        assertThat(context.promptContext()).contains("近期因决策压力睡眠不佳");
+        assertThat(context.promptContext()).contains("趋势：持续焦虑");
+        assertThat(context.promptContext()).contains("情绪：焦虑");
+        assertThat(context.awareness()).hasSize(1);
     }
 
     @Test
@@ -422,7 +455,8 @@ class MemoryRetrievalServiceTest {
                 properties,
                 decisionRecallService,
                 retrievalLogService,
-                new MemoryRetrievalIntentService(properties));
+                new MemoryRetrievalIntentService(properties),
+                awarenessService);
     }
 
     private ProfileValues value(String item, String preference, String confidence) {

@@ -184,6 +184,7 @@ class DecisionAgentServiceTest {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
                 new MemoryContext.RetrievalMetrics(0, 0, 0, 0, 0,
                         semanticHitCount, maxSemanticScore, true, false),
                 "用户价值观上下文");

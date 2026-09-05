@@ -10,6 +10,7 @@ public record MemoryContext(
         List<ProfileMemory> fears,
         List<ProfileMemory> coreProfiles,
         List<SemanticMemory> semanticMemories,
+        List<AwarenessMemory> awareness,
         RetrievalMetrics metrics,
         String promptContext) {
 
@@ -21,6 +22,7 @@ public record MemoryContext(
         fears = List.copyOf(fears);
         coreProfiles = List.copyOf(coreProfiles);
         semanticMemories = List.copyOf(semanticMemories);
+        awareness = List.copyOf(awareness);
     }
 
     public record ProfileMemory(String subject, String content, String detail, Double confidence) {
@@ -52,6 +54,14 @@ public record MemoryContext(
         public SemanticMemory {
             rerankReason = rerankReason == null ? "" : rerankReason;
         }
+    }
+
+    /** 近期觉察（Awareness）记忆：近因层，由 LLM 从近期对话提炼。 */
+    public record AwarenessMemory(
+            String date,
+            String observation,
+            String trend,
+            String emotionGuess) {
     }
 
     public record RetrievalMetrics(

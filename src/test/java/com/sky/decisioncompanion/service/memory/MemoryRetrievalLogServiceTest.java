@@ -96,6 +96,7 @@ class MemoryRetrievalLogServiceTest {
                 List.of(new MemoryContext.ProfileMemory("fear", "害怕离家太远", "", 0.8)),
                 List.of(),
                 semanticMemories,
+                List.of(),
                 new MemoryContext.RetrievalMetrics(1, 1, 1, 1, 1,
                         semanticMemories.size(), 0.82, true, false),
                 "长期记忆背景包");

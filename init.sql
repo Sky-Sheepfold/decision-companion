@@ -215,6 +215,24 @@ CREATE TABLE IF NOT EXISTS profile_extract_job (
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='档案提炼任务队列';
 
+-- 近期觉察记忆（Awareness 近因层）
+CREATE TABLE IF NOT EXISTS memory_awareness (
+    id                  BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id             BIGINT NOT NULL COMMENT '用户ID',
+    observation         VARCHAR(500) NOT NULL COMMENT '观察结论',
+    trend               VARCHAR(200) COMMENT '趋势',
+    emotion_guess       VARCHAR(100) COMMENT '情绪猜测',
+    aware_date          DATE COMMENT '观察日期',
+    source_message_ids  VARCHAR(1000) COMMENT '来源消息ID（证据链，逗号分隔）',
+    source_approximate  BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否整批近似归属',
+    active              BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否有效',
+    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_awareness_user_date (user_id, aware_date),
+    INDEX idx_awareness_user_active (user_id, active),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='近期觉察记忆';
+
 -- 聊天会话
 CREATE TABLE IF NOT EXISTS chat_conversation (
     id            BIGINT PRIMARY KEY AUTO_INCREMENT,
