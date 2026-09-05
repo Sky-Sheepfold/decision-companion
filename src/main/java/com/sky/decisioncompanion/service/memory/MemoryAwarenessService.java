@@ -28,7 +28,8 @@ import java.util.stream.Collectors;
 /**
  * 近期觉察（Awareness）记忆服务 —— 近因层。
  *
- * <p>对齐 OpenBiliClaw 的 Awareness 层：定时从近期对话中让 LLM 提炼结构化观察
+ * <p>
+ * 对齐 OpenBiliClaw 的 Awareness 层：定时从近期对话中让 LLM 提炼结构化观察
  * （date / observation / trend / emotion_guess），同日去重、带来源消息证据链，
  * 作为易变块注入 prompt，与稳定核心画像（Core）和场景记忆（Episodic）互补。
  */
@@ -136,15 +137,17 @@ public class MemoryAwarenessService {
     }
 
     /**
-     * 读取最近的觉察记录（供召回注入易变块）。
+     * 读取最近的觉察记录（供召回注入易变块），仅返回窗口期内（近 {@code windowDays} 天）的有效觉察。
      */
     public List<MemoryAwareness> findRecent(Long userId, int limit) {
         if (userId == null) {
             return List.of();
         }
+        LocalDate since = LocalDate.now().minusDays(properties.windowDays());
         return awarenessRepository.selectList(new LambdaQueryWrapper<MemoryAwareness>()
                 .eq(MemoryAwareness::getUserId, userId)
                 .eq(MemoryAwareness::getActive, true)
+                .ge(MemoryAwareness::getAwareDate, since)
                 .orderByDesc(MemoryAwareness::getAwareDate)
                 .orderByDesc(MemoryAwareness::getId)
                 .last("LIMIT " + Math.max(1, limit)));
@@ -174,7 +177,8 @@ public class MemoryAwarenessService {
                   {"date": "2026-09-05", "observation": "观察结论（一句话）", "trend": "趋势（如持续纠结/情绪低落/逐步坚定）", "emotion_guess": "情绪猜测（如焦虑/平静/矛盾）"}
                 ]
                 观察必须来自对话内容，不要臆测；证据不足返回空数组。
-                """.formatted(transcript);
+                """
+                .formatted(transcript);
         return chatClient.prompt().messages(new UserMessage(prompt)).call().content();
     }
 
