@@ -29,6 +29,9 @@ public class ProfileMemoryAuditLog {
     private String afterSnapshot;
     private String reason;
 
+    /** PostureGate 门控裁判结论（accept/reject/downgrade/shadow_error）。未过门控的写入为 null。 */
+    private String gateVerdict;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 }

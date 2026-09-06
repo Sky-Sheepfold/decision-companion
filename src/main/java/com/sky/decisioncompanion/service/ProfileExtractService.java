@@ -366,10 +366,19 @@ public class ProfileExtractService {
         }
         if ("written".equals(decision.action())) {
             // 深层画像门控：enforce 模式下由 LLM 裁判决定是否直接写入，拦截则降级为候选
+            String gateVerdict = null;
             if (postureGateService.shouldGate(profileType)) {
                 PostureGateService.GateVerdict verdict = postureGateService.evaluate(
                         userId, profileType, subject, content, evidence, confidence);
+                gateVerdict = verdict.action();
                 if (!verdict.accepted()) {
+                    try {
+                        profileMemoryGovernanceService.recordGateRejection(
+                                userId, profileType, subject, gateVerdict);
+                    } catch (Exception e) {
+                        logger.warn("门控拒绝审计记录失败, userId: {}, profileType: {}, subject: {}",
+                                userId, profileType, subject, e);
+                    }
                     profileMemoryGovernanceService.createCandidate(
                             new ProfileMemoryGovernanceService.MemoryCandidateCommand(
                                     userId,
@@ -382,7 +391,7 @@ public class ProfileExtractService {
                                     "profile_extract",
                                     null));
                     logger.info("深层画像被门控降级为候选, userId: {}, profileType: {}, subject: {}, action: {}",
-                            userId, profileType, subject, verdict.action());
+                            userId, profileType, subject, gateVerdict);
                     return 0;
                 }
             }
@@ -398,7 +407,8 @@ public class ProfileExtractService {
                                     evidence,
                                     "profile_extract",
                                     null,
-                                    userMessage));
+                                    userMessage,
+                                    gateVerdict));
             return result != null && result.success() ? 1 : 0;
         }
         return 0;

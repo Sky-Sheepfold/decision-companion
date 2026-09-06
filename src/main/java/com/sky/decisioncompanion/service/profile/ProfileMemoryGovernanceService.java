@@ -1,6 +1,7 @@
 package com.sky.decisioncompanion.service.profile;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sky.decisioncompanion.common.BusinessException;
@@ -20,7 +21,12 @@ import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileSceneMemoryLinkRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -34,6 +40,8 @@ import java.util.stream.Stream;
 
 @Service
 public class ProfileMemoryGovernanceService {
+
+    private static final Logger logger = LoggerFactory.getLogger(ProfileMemoryGovernanceService.class);
 
     private static final String STATUS_PENDING = "pending";
     private static final String STATUS_CONFIRMED = "confirmed";
@@ -52,6 +60,11 @@ public class ProfileMemoryGovernanceService {
     private final ProfileSceneMemoryLinkRepository linkRepository;
     private final ProfileSceneMemoryService sceneMemoryService;
     private final ObjectMapper objectMapper;
+    private final EmbeddingModel embeddingModel;
+
+    /** 候选近重复语义去重阈值（embedding 余弦相似度）。 */
+    @Value("${decision-companion.memory.governance.near-duplicate-threshold:0.85}")
+    private Double nearDuplicateThreshold;
 
     public ProfileMemoryGovernanceService(
             ProfileMemoryCandidateRepository candidateRepository,
@@ -62,7 +75,8 @@ public class ProfileMemoryGovernanceService {
             ProfileFearRepository fearRepository,
             ProfileSceneMemoryLinkRepository linkRepository,
             ProfileSceneMemoryService sceneMemoryService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            EmbeddingModel embeddingModel) {
         this.candidateRepository = candidateRepository;
         this.auditLogRepository = auditLogRepository;
         this.valuesRepository = valuesRepository;
@@ -72,6 +86,7 @@ public class ProfileMemoryGovernanceService {
         this.linkRepository = linkRepository;
         this.sceneMemoryService = sceneMemoryService;
         this.objectMapper = objectMapper.copy().findAndRegisterModules();
+        this.embeddingModel = embeddingModel;
     }
 
     @Transactional
@@ -88,22 +103,15 @@ public class ProfileMemoryGovernanceService {
         ProfileMemoryCandidate existing = findEquivalentPendingCandidate(
                 command.userId(), profileType, subject, content, detail, now);
         if (existing != null) {
-            existing.setProfileType(profileType);
-            existing.setSubject(subject);
-            existing.setContent(content);
-            existing.setDetail(detail);
-            existing.setConfidence(max(existing.getConfidence(), confidence));
-            existing.setEvidence(toJson(mergeEvidence(parseEvidence(existing.getEvidence()), command.evidence())));
-            if (StringUtils.hasText(command.source())) {
-                existing.setSource(command.source().trim());
-            }
-            if (command.sourceConversationId() != null) {
-                existing.setSourceConversationId(command.sourceConversationId());
-            }
-            existing.setStatus(STATUS_PENDING);
-            existing.setUpdatedAt(now);
-            candidateRepository.updateById(existing);
+            mergePendingCandidate(existing, command, now, true);
             return existing;
+        }
+        // 语义近重复：LLM 换措辞产生的重复候选合并（embedding 失败降级为纯文本去重，不阻塞写入）
+        ProfileMemoryCandidate nearDuplicate = findNearDuplicateCandidate(
+                command.userId(), profileType, subject, content, now);
+        if (nearDuplicate != null) {
+            mergePendingCandidate(nearDuplicate, command, now, false);
+            return nearDuplicate;
         }
 
         ProfileMemoryCandidate candidate = new ProfileMemoryCandidate();
@@ -124,6 +132,119 @@ public class ProfileMemoryGovernanceService {
         return candidate;
     }
 
+    /**
+     * 合并候选（精确重复 {@code adoptText=true} 时采用新文本；语义近重复 {@code adoptText=false}
+     * 保留原候选文本为规范，只合并置信度上限与证据去重，避免措辞反复横跳）。
+     */
+    private void mergePendingCandidate(
+            ProfileMemoryCandidate existing,
+            MemoryCandidateCommand command,
+            LocalDateTime now,
+            boolean adoptText) {
+        if (adoptText) {
+            existing.setProfileType(normalizeProfileType(command.profileType()));
+            existing.setSubject(clean(command.subject()));
+            existing.setContent(clean(command.content()));
+            existing.setDetail(clean(command.detail()));
+        }
+        existing.setConfidence(max(existing.getConfidence(), command.confidence()));
+        existing.setEvidence(toJson(mergeEvidence(parseEvidence(existing.getEvidence()), command.evidence())));
+        if (StringUtils.hasText(command.source())) {
+            existing.setSource(command.source().trim());
+        }
+        if (command.sourceConversationId() != null) {
+            existing.setSourceConversationId(command.sourceConversationId());
+        }
+        existing.setStatus(STATUS_PENDING);
+        existing.setUpdatedAt(now);
+        candidateRepository.updateById(existing);
+    }
+
+    /**
+     * 语义近重复匹配：对未精确命中的候选，与同用户同类型待确认候选做 embedding 余弦相似度比对，
+     * 找到 >= {@link #nearDuplicateThreshold()} 的最相似行。嵌入计算失败时降级返回 null（回退纯文本去重）。
+     */
+    private ProfileMemoryCandidate findNearDuplicateCandidate(
+            Long userId, String profileType, String subject, String content, LocalDateTime now) {
+        double threshold = nearDuplicateThreshold();
+        if (threshold <= 0.0 || embeddingModel == null) {
+            return null;
+        }
+        List<ProfileMemoryCandidate> candidates = candidateRepository.selectList(
+                new LambdaQueryWrapper<ProfileMemoryCandidate>()
+                        .eq(ProfileMemoryCandidate::getUserId, userId)
+                        .eq(ProfileMemoryCandidate::getProfileType, profileType)
+                        .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING)
+                        .gt(ProfileMemoryCandidate::getExpiresAt, now)
+                        .orderByAsc(ProfileMemoryCandidate::getCreatedAt)
+                        .last("LIMIT 50"));
+        if (candidates.isEmpty()) {
+            return null;
+        }
+        // 排除已命中的精确重复，避免重复计算
+        List<ProfileMemoryCandidate> distinct = candidates.stream()
+                .filter(candidate -> !normalizeKey(candidate.getSubject()).equals(normalizeKey(subject))
+                        || !normalizeKey(candidate.getContent()).equals(normalizeKey(content)))
+                .toList();
+        if (distinct.isEmpty()) {
+            return null;
+        }
+        String queryText = subject + "：" + content;
+        try {
+            float[] queryVector = embeddingModel.embed(queryText);
+            List<String> candidateTexts = distinct.stream()
+                    .map(candidate -> clean(candidate.getSubject()) + "：" + clean(candidate.getContent()))
+                    .toList();
+            List<float[]> candidateVectors = embeddingModel.embed(candidateTexts);
+            double best = threshold;
+            int bestIndex = -1;
+            for (int i = 0; i < distinct.size(); i++) {
+                float[] candidateVector = candidateVectors.get(i);
+                if (candidateVector == null) {
+                    continue;
+                }
+                double similarity = cosineSimilarity(queryVector, candidateVector);
+                if (similarity >= best) {
+                    best = similarity;
+                    bestIndex = i;
+                }
+            }
+            if (bestIndex >= 0) {
+                ProfileMemoryCandidate matched = distinct.get(bestIndex);
+                logger.info("候选近重复语义去重合并, userId: {}, profileType: {}, subject: {}, 命中: {}, similarity: {}",
+                        userId, profileType, subject, clean(matched.getSubject()),
+                        String.format(Locale.ROOT, "%.3f", best));
+                return matched;
+            }
+        } catch (Exception e) {
+            logger.warn("候选近重复语义去重嵌入计算失败，降级为纯文本去重, userId: {}, profileType: {}",
+                    userId, profileType, e);
+        }
+        return null;
+    }
+
+    private double cosineSimilarity(float[] first, float[] second) {
+        if (first == null || second == null || first.length == 0 || first.length != second.length) {
+            return 0.0;
+        }
+        double dot = 0.0;
+        double firstNorm = 0.0;
+        double secondNorm = 0.0;
+        for (int i = 0; i < first.length; i++) {
+            dot += (double) first[i] * second[i];
+            firstNorm += (double) first[i] * first[i];
+            secondNorm += (double) second[i] * second[i];
+        }
+        if (firstNorm == 0.0 || secondNorm == 0.0) {
+            return 0.0;
+        }
+        return dot / (Math.sqrt(firstNorm) * Math.sqrt(secondNorm));
+    }
+
+    private double nearDuplicateThreshold() {
+        return nearDuplicateThreshold == null ? 0.80 : nearDuplicateThreshold;
+    }
+
     public List<ProfileMemoryCandidate> listPendingCandidates(Long userId) {
         validateUser(userId);
         LocalDateTime now = LocalDateTime.now();
@@ -142,6 +263,25 @@ public class ProfileMemoryGovernanceService {
                 .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING)
                 .gt(ProfileMemoryCandidate::getExpiresAt, now));
         return Math.toIntExact(count == null ? 0L : count);
+    }
+
+    /**
+     * 定时回收过期候选：把 status=pending 且已超过 expires_at 的候选批量标记为 expired。
+     * 避免过期候选长期以 pending 状态残留（懒标记只覆盖被访问到的候选），返回本次标记数量。
+     */
+    @Scheduled(fixedDelayString = "${decision-companion.memory.governance.expire-scan-ms:3600000}")
+    public int expireCandidates() {
+        LocalDateTime now = LocalDateTime.now();
+        int updated = candidateRepository.update(null, new LambdaUpdateWrapper<ProfileMemoryCandidate>()
+                .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING)
+                .lt(ProfileMemoryCandidate::getExpiresAt, now)
+                .set(ProfileMemoryCandidate::getStatus, STATUS_EXPIRED)
+                .set(ProfileMemoryCandidate::getHandledAt, now)
+                .set(ProfileMemoryCandidate::getUpdatedAt, now));
+        if (updated > 0) {
+            logger.info("回收过期画像候选: {}", updated);
+        }
+        return updated;
     }
 
     public List<ProfileMemoryAuditLog> listAuditLogs(Long userId, Integer limit) {
@@ -171,7 +311,7 @@ public class ProfileMemoryGovernanceService {
                 command.sourceConversationId(),
                 command.userMessage()));
         writeAudit(command.userId(), profileType, formal.profileRecordId(), null, "confirm",
-                null, formal.profile(), null);
+                null, formal.profile(), null, command.gateVerdict());
 
         return new GovernanceResult(true, "confirm", profileType, formal.profileRecordId(), null, "画像记忆已写入");
     }
@@ -199,7 +339,7 @@ public class ProfileMemoryGovernanceService {
         candidate.setUpdatedAt(now);
         candidateRepository.updateById(candidate);
         writeAudit(userId, candidate.getProfileType(), formal.profileRecordId(), candidate.getId(), "confirm",
-                beforeSnapshot, toAuditJson(formal.profile()), null);
+                beforeSnapshot, toAuditJson(formal.profile()), null, null);
 
         return new GovernanceResult(true, "confirm", candidate.getProfileType(),
                 formal.profileRecordId(), candidate.getId(), "待确认记忆已确认并写入");
@@ -215,7 +355,7 @@ public class ProfileMemoryGovernanceService {
         candidate.setUpdatedAt(now);
         candidateRepository.updateById(candidate);
         writeAudit(userId, candidate.getProfileType(), null, candidate.getId(), "reject",
-                beforeSnapshot, "{}", reason);
+                beforeSnapshot, "{}", reason, null);
         return new GovernanceResult(true, "reject", candidate.getProfileType(), null,
                 candidate.getId(), "待确认记忆已拒绝");
     }
@@ -244,7 +384,7 @@ public class ProfileMemoryGovernanceService {
         candidate.setUpdatedAt(now);
         candidateRepository.updateById(candidate);
         writeAudit(userId, candidate.getProfileType(), formal.profileRecordId(), candidate.getId(), "correct",
-                beforeSnapshot, toAuditJson(formal.profile()), command.reason());
+                beforeSnapshot, toAuditJson(formal.profile()), command.reason(), null);
         return new GovernanceResult(true, "correct", candidate.getProfileType(),
                 formal.profileRecordId(), candidate.getId(), "待确认记忆已修正并写入");
     }
@@ -277,7 +417,7 @@ public class ProfileMemoryGovernanceService {
                 null,
                 command.content()));
         writeAudit(userId, normalizedType, formal.profileRecordId(), null, "correct",
-                beforeSnapshot, toAuditJson(formal.profile()), reason);
+                beforeSnapshot, toAuditJson(formal.profile()), reason, null);
         return new GovernanceResult(true, "correct", normalizedType,
                 formal.profileRecordId(), null, "画像记录已修正");
     }
@@ -290,7 +430,7 @@ public class ProfileMemoryGovernanceService {
         String beforeSnapshot = toAuditJson(before);
         deactivateProfile(normalizedType, before);
         deleteActiveLinks(userId, normalizedType, profileRecordId);
-        writeAudit(userId, normalizedType, profileRecordId, null, "delete", beforeSnapshot, "{}", reason);
+        writeAudit(userId, normalizedType, profileRecordId, null, "delete", beforeSnapshot, "{}", reason, null);
         return new GovernanceResult(true, "delete", normalizedType, profileRecordId, null, "画像记录已删除");
     }
 
@@ -459,10 +599,10 @@ public class ProfileMemoryGovernanceService {
             String detail,
             LocalDateTime now) {
         return safeRepositoryList(candidateRepository.selectList(new LambdaQueryWrapper<ProfileMemoryCandidate>()
-                        .eq(ProfileMemoryCandidate::getUserId, userId)
-                        .eq(ProfileMemoryCandidate::getProfileType, profileType)
-                        .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING)
-                        .gt(ProfileMemoryCandidate::getExpiresAt, now)))
+                .eq(ProfileMemoryCandidate::getUserId, userId)
+                .eq(ProfileMemoryCandidate::getProfileType, profileType)
+                .eq(ProfileMemoryCandidate::getStatus, STATUS_PENDING)
+                .gt(ProfileMemoryCandidate::getExpiresAt, now)))
                 .stream()
                 .filter(candidate -> Objects.equals(userId, candidate.getUserId()))
                 .filter(candidate -> STATUS_PENDING.equals(candidate.getStatus()))
@@ -477,8 +617,8 @@ public class ProfileMemoryGovernanceService {
 
     private ProfileValues findValue(Long userId, String item) {
         return safeRepositoryList(valuesRepository.selectList(new LambdaQueryWrapper<ProfileValues>()
-                        .eq(ProfileValues::getUserId, userId)
-                        .eq(ProfileValues::getActive, true)))
+                .eq(ProfileValues::getUserId, userId)
+                .eq(ProfileValues::getActive, true)))
                 .stream()
                 .filter(value -> Objects.equals(userId, value.getUserId()))
                 .filter(value -> Boolean.TRUE.equals(value.getActive()))
@@ -489,8 +629,8 @@ public class ProfileMemoryGovernanceService {
 
     private ProfileEmotion findEmotion(Long userId, String emotion, String triggerDesc) {
         return safeRepositoryList(emotionRepository.selectList(new LambdaQueryWrapper<ProfileEmotion>()
-                        .eq(ProfileEmotion::getUserId, userId)
-                        .eq(ProfileEmotion::getActive, true)))
+                .eq(ProfileEmotion::getUserId, userId)
+                .eq(ProfileEmotion::getActive, true)))
                 .stream()
                 .filter(value -> Objects.equals(userId, value.getUserId()))
                 .filter(value -> Boolean.TRUE.equals(value.getActive()))
@@ -502,8 +642,8 @@ public class ProfileMemoryGovernanceService {
 
     private ProfileRelationship findRelationship(Long userId, String name) {
         return safeRepositoryList(relationshipRepository.selectList(new LambdaQueryWrapper<ProfileRelationship>()
-                        .eq(ProfileRelationship::getUserId, userId)
-                        .eq(ProfileRelationship::getActive, true)))
+                .eq(ProfileRelationship::getUserId, userId)
+                .eq(ProfileRelationship::getActive, true)))
                 .stream()
                 .filter(value -> Objects.equals(userId, value.getUserId()))
                 .filter(value -> Boolean.TRUE.equals(value.getActive()))
@@ -514,9 +654,9 @@ public class ProfileMemoryGovernanceService {
 
     private ProfileFear findFear(Long userId, String type, String description) {
         return safeRepositoryList(fearRepository.selectList(new LambdaQueryWrapper<ProfileFear>()
-                        .eq(ProfileFear::getUserId, userId)
-                        .eq(ProfileFear::getActive, true)
-                        .eq(ProfileFear::getType, type)))
+                .eq(ProfileFear::getUserId, userId)
+                .eq(ProfileFear::getActive, true)
+                .eq(ProfileFear::getType, type)))
                 .stream()
                 .filter(value -> Objects.equals(userId, value.getUserId()))
                 .filter(value -> Boolean.TRUE.equals(value.getActive()))
@@ -531,9 +671,10 @@ public class ProfileMemoryGovernanceService {
         if (candidateId == null) {
             throw new BusinessException(ResultCode.BAD_REQUEST);
         }
-        ProfileMemoryCandidate candidate = candidateRepository.selectOne(new LambdaQueryWrapper<ProfileMemoryCandidate>()
-                .eq(ProfileMemoryCandidate::getId, candidateId)
-                .last("FOR UPDATE"));
+        ProfileMemoryCandidate candidate = candidateRepository
+                .selectOne(new LambdaQueryWrapper<ProfileMemoryCandidate>()
+                        .eq(ProfileMemoryCandidate::getId, candidateId)
+                        .last("FOR UPDATE"));
         if (candidate == null || !userId.equals(candidate.getUserId())) {
             throw new BusinessException(ResultCode.PROFILE_MEMORY_NOT_FOUND);
         }
@@ -640,9 +781,10 @@ public class ProfileMemoryGovernanceService {
             String action,
             Object before,
             Object after,
-            String reason) {
+            String reason,
+            String gateVerdict) {
         writeAudit(userId, profileType, profileRecordId, candidateId, action,
-                toAuditJson(before), toAuditJson(after), reason);
+                toAuditJson(before), toAuditJson(after), reason, gateVerdict);
     }
 
     private void writeAudit(
@@ -653,7 +795,8 @@ public class ProfileMemoryGovernanceService {
             String action,
             String beforeSnapshot,
             String afterSnapshot,
-            String reason) {
+            String reason,
+            String gateVerdict) {
         ProfileMemoryAuditLog auditLog = new ProfileMemoryAuditLog();
         auditLog.setUserId(userId);
         auditLog.setProfileType(profileType);
@@ -663,8 +806,20 @@ public class ProfileMemoryGovernanceService {
         auditLog.setBeforeSnapshot(beforeSnapshot);
         auditLog.setAfterSnapshot(afterSnapshot);
         auditLog.setReason(reason);
+        auditLog.setGateVerdict(gateVerdict);
         auditLog.setCreatedAt(LocalDateTime.now());
         auditLogRepository.insert(auditLog);
+    }
+
+    /**
+     * 记录一次门控拒绝（gate_reject）审计：门控裁判拒绝/降级了深层画像的直接写入，转候选确认。
+     * 用于评估 PostureGate 裁判质量，shadow 模式下的放行结论随写入审计一并记录。
+     */
+    @Transactional(noRollbackFor = BusinessException.class)
+    public void recordGateRejection(Long userId, String profileType, String subject, String verdict) {
+        validateUser(userId);
+        writeAudit(userId, normalizeProfileType(profileType), null, null, "gate_reject",
+                "{}", "{}", truncate(clean(subject), 500), truncate(clean(verdict), 20));
     }
 
     private String normalizeProfileType(String profileType) {
@@ -765,6 +920,11 @@ public class ProfileMemoryGovernanceService {
         return value == null ? "" : value.trim();
     }
 
+    private String truncate(String value, int maxLength) {
+        String cleaned = clean(value);
+        return cleaned.length() <= maxLength ? cleaned : cleaned.substring(0, maxLength);
+    }
+
     private String defaultIfBlank(String value, String defaultValue) {
         return StringUtils.hasText(value) ? value.trim() : defaultValue;
     }
@@ -794,7 +954,8 @@ public class ProfileMemoryGovernanceService {
             List<String> evidence,
             String source,
             Long sourceConversationId,
-            String userMessage) {
+            String userMessage,
+            String gateVerdict) {
     }
 
     public record GovernanceResult(

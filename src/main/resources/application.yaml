@@ -65,6 +65,10 @@ decision-companion:
       retry-delay-ms: 15000
     posture-gate:
       mode: off
+    governance:
+      expire-scan-ms: 3600000
+      # 真实数据实测：LLM 换措辞的候选相似度约 0.75-0.81，0.85 偏严会漏合并，取 0.80 平衡
+      near-duplicate-threshold: 0.80
     awareness:
       enabled: true
       window-days: 7

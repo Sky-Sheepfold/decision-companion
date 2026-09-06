@@ -252,7 +252,8 @@ public class DecisionAgentToolService {
                             safeList(evidence, 5),
                             "agent_tool_update",
                             context.conversationId(),
-                            context.message()));
+                            context.message(),
+                            null));
             String resultAction = governanceResult.success() ? "written" : governanceResult.action();
             if (governanceResult.success()) {
                 logService.recordSuccess(context.userId(), context.conversationId(), "updateUserProfile",

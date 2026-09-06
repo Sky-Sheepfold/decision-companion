@@ -47,15 +47,17 @@ public class PostureGateService {
             return GateVerdict.accept("mode_off");
         }
         if ("shadow".equals(mode)) {
-            // 影子模式：不阻塞写入，仅记录裁判结论用于评估
+            // 影子模式：不阻塞写入，仅记录裁判结论用于评估；把裁判原始结论带回供审计落库
             try {
                 String judgment = callJudge(profileType, subject, content, evidence, confidence);
+                String judgeVerdict = parseVerdict(judgment);
                 logger.info("深层画像门控影子裁判, userId: {}, profileType: {}, subject: {}, verdict: {}",
-                        userId, profileType, subject, parseVerdict(judgment));
+                        userId, profileType, subject, judgeVerdict);
+                return GateVerdict.accept(judgeVerdict);
             } catch (Exception e) {
                 logger.debug("深层画像门控影子裁判异常, userId: {}, subject: {}", userId, subject, e);
+                return GateVerdict.accept("shadow_error");
             }
-            return GateVerdict.accept("shadow");
         }
         // enforce：阻塞等待裁判，异常保守降级
         try {

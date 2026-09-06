@@ -1,7 +1,9 @@
 package com.sky.decisioncompanion.service.profile;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.SharedString;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sky.decisioncompanion.common.BusinessException;
 import com.sky.decisioncompanion.common.ResultCode;
@@ -17,12 +19,14 @@ import com.sky.decisioncompanion.repository.ProfileRelationshipRepository;
 import com.sky.decisioncompanion.repository.ProfileSceneMemoryLinkRepository;
 import com.sky.decisioncompanion.repository.ProfileValuesRepository;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,7 +39,11 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -74,6 +82,8 @@ class ProfileMemoryGovernanceServiceTest {
 
     @BeforeEach
     void setUp() {
+        // 预注册实体元信息，保证 Lambda 条件构造器在单测中可解析列（mock mapper 不会自动注册 TableInfo）
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), ProfileMemoryCandidate.class);
         service = new ProfileMemoryGovernanceService(
                 candidateRepository,
                 auditLogRepository,
@@ -83,7 +93,8 @@ class ProfileMemoryGovernanceServiceTest {
                 fearRepository,
                 linkRepository,
                 sceneMemoryService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                null);
     }
 
     @Test
@@ -272,7 +283,8 @@ class ProfileMemoryGovernanceServiceTest {
                         List.of("我不想每天被排满"),
                         "agent_tool_update",
                         88L,
-                        "我不想每天被排满"));
+                        "我不想每天被排满",
+                        null));
 
         assertThat(result.success()).isTrue();
         assertThat(result.profileRecordId()).isEqualTo(222L);
@@ -321,7 +333,8 @@ class ProfileMemoryGovernanceServiceTest {
                         List.of("我不想每天被排满"),
                         "agent_tool_update",
                         88L,
-                        "我不想每天被排满"));
+                        "我不想每天被排满",
+                        null));
 
         assertThat(result.profileRecordId()).isEqualTo(223L);
         verify(linkRepository, never()).insert(any(ProfileSceneMemoryLink.class));
@@ -361,7 +374,8 @@ class ProfileMemoryGovernanceServiceTest {
                         List.of("我不想每天被排满"),
                         "agent_tool_update",
                         88L,
-                        "我不想每天被排满"));
+                        "我不想每天被排满",
+                        null));
 
         assertThat(result.profileRecordId()).isEqualTo(224L);
         verify(valuesRepository).updateById(existingValue);
@@ -400,7 +414,8 @@ class ProfileMemoryGovernanceServiceTest {
                         List.of("我不想每天被排满"),
                         "agent_tool_update",
                         88L,
-                        "我不想每天被排满"));
+                        "我不想每天被排满",
+                        null));
 
         assertThat(result.profileRecordId()).isEqualTo(225L);
         verify(linkRepository).insert(any(ProfileSceneMemoryLink.class));
@@ -584,6 +599,109 @@ class ProfileMemoryGovernanceServiceTest {
         candidate.setSourceConversationId(99L);
         candidate.setStatus("pending");
         candidate.setExpiresAt(LocalDateTime.now().plusDays(1));
+        return candidate;
+    }
+
+    @Test
+    void expireCandidatesBatchMarksOverduePendingAsExpired() {
+        when(candidateRepository.update(any(), any())).thenReturn(2);
+
+        int updated = service.expireCandidates();
+
+        assertThat(updated).isEqualTo(2);
+        verify(candidateRepository).update(isNull(), any());
+    }
+
+    @Test
+    void expireCandidatesReturnsZeroWhenNothingOverdue() {
+        when(candidateRepository.update(any(), any())).thenReturn(0);
+
+        int updated = service.expireCandidates();
+
+        assertThat(updated).isZero();
+        verify(candidateRepository).update(isNull(), any());
+    }
+
+    @Test
+    void createCandidateMergesSemanticNearDuplicateKeepingCanonicalText() {
+        ProfileMemoryCandidate existing = pendingCandidate("家庭优先", "家人比金钱重要");
+        existing.setId(101L);
+        existing.setConfidence(new BigDecimal("0.80"));
+        existing.setEvidence("[\"家人对我来说最重要\"]");
+        when(candidateRepository.selectList(any())).thenReturn(List.of(existing));
+
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{1.0f, 0.0f});
+        when(embeddingModel.embed(anyList())).thenReturn(List.of(new float[]{0.9f, 0.1f}));
+        ProfileMemoryGovernanceService semanticService = new ProfileMemoryGovernanceService(
+                candidateRepository, auditLogRepository, valuesRepository, emotionRepository,
+                relationshipRepository, fearRepository, linkRepository, sceneMemoryService,
+                new ObjectMapper(), embeddingModel);
+
+        ProfileMemoryCandidate result = semanticService.createCandidate(
+                new ProfileMemoryGovernanceService.MemoryCandidateCommand(
+                        USER_ID,
+                        "value",
+                        "把家人放在第一位",
+                        "钱再多也比不上家人重要",
+                        "",
+                        new BigDecimal("0.90"),
+                        List.of("家人比钱重要多了"),
+                        "profile_extract",
+                        null));
+
+        // 命中近重复候选：合并到原候选，且规范文本不被新措辞覆盖
+        assertThat(result).isSameAs(existing);
+        assertThat(existing.getSubject()).isEqualTo("家庭优先");
+        assertThat(existing.getContent()).isEqualTo("家人比金钱重要");
+        assertThat(existing.getConfidence()).isEqualByComparingTo("0.90");
+        assertThat(existing.getEvidence()).contains("家人比钱重要多了");
+        verify(candidateRepository).updateById(existing);
+        verify(candidateRepository, never()).insert(any(ProfileMemoryCandidate.class));
+    }
+
+    @Test
+    void createCandidateInsertsWhenEmbeddingFails() {
+        when(candidateRepository.selectList(any())).thenReturn(List.of(pendingCandidate("家庭优先", "家人比金钱重要")));
+        doAnswer(invocation -> {
+            ProfileMemoryCandidate saved = invocation.getArgument(0);
+            saved.setId(200L);
+            return 1;
+        }).when(candidateRepository).insert(any(ProfileMemoryCandidate.class));
+
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(anyString())).thenThrow(new RuntimeException("embedding down"));
+        ProfileMemoryGovernanceService semanticService = new ProfileMemoryGovernanceService(
+                candidateRepository, auditLogRepository, valuesRepository, emotionRepository,
+                relationshipRepository, fearRepository, linkRepository, sceneMemoryService,
+                new ObjectMapper(), embeddingModel);
+
+        ProfileMemoryCandidate result = semanticService.createCandidate(
+                new ProfileMemoryGovernanceService.MemoryCandidateCommand(
+                        USER_ID,
+                        "value",
+                        "把家人放在第一位",
+                        "钱再多也比不上家人重要",
+                        "",
+                        new BigDecimal("0.90"),
+                        List.of("证据"),
+                        "profile_extract",
+                        null));
+
+        // 嵌入失败降级：不阻塞，直接新增候选
+        assertThat(result.getId()).isEqualTo(200L);
+        verify(candidateRepository).insert(any(ProfileMemoryCandidate.class));
+    }
+
+    private ProfileMemoryCandidate pendingCandidate(String subject, String content) {
+        ProfileMemoryCandidate candidate = new ProfileMemoryCandidate();
+        candidate.setUserId(USER_ID);
+        candidate.setProfileType("value");
+        candidate.setSubject(subject);
+        candidate.setContent(content);
+        candidate.setStatus("pending");
+        candidate.setExpiresAt(LocalDateTime.now().plusDays(7));
+        candidate.setCreatedAt(LocalDateTime.now().minusMinutes(5));
         return candidate;
     }
 
