@@ -63,10 +63,34 @@ CREATE TABLE IF NOT EXISTS agent_tool_call_log (
     latency_ms      INT COMMENT '耗时毫秒',
     error_message   VARCHAR(500) COMMENT '错误信息',
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    finished_at     DATETIME COMMENT '完成时间',
     INDEX idx_agent_tool_user_created (user_id, created_at),
     INDEX idx_agent_tool_conversation_created (conversation_id, created_at),
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent工具调用日志';
+
+-- Agent 工具写入副作用幂等账本：先占位(processing)后回填(committed)，唯一键作为执行闸门，防重复副作用
+CREATE TABLE IF NOT EXISTS agent_tool_effect (
+    id                BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id           BIGINT NOT NULL COMMENT '用户ID',
+    conversation_id   BIGINT COMMENT '会话ID',
+    request_id        VARCHAR(128) COMMENT '发起请求ID，用于调用链路溯源',
+    tool_name         VARCHAR(100) NOT NULL COMMENT '工具名称',
+    idempotency_key   VARCHAR(128) NOT NULL COMMENT '幂等键 userId:conversationId:toolName:paramsHash，全库唯一',
+    action            VARCHAR(30) COMMENT '终态动作 written/needs_confirmation/skipped',
+    profile_type      VARCHAR(30) COMMENT '画像类型',
+    subject           VARCHAR(200) COMMENT '画像主体',
+    message           VARCHAR(500) COMMENT '结果消息',
+    profile_record_id BIGINT COMMENT '已写入画像记录ID',
+    candidate_id      BIGINT COMMENT '已生成候选ID',
+    status            VARCHAR(20) NOT NULL DEFAULT 'committed' COMMENT '状态：processing=占位执行中/committed=已提交终态',
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    committed_at      DATETIME COMMENT '提交终态时间',
+    UNIQUE KEY uk_effect_idempotency_key (idempotency_key),
+    INDEX idx_effect_user_created (user_id, created_at),
+    INDEX idx_effect_status_created (status, created_at),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent工具写入副作用幂等账本';
 
 -- Memory RAG 召回日志
 CREATE TABLE IF NOT EXISTS memory_retrieval_log (
@@ -150,6 +174,7 @@ CREATE TABLE IF NOT EXISTS profile_memory_candidate (
     evidence               JSON COMMENT '证据',
     source                 VARCHAR(50) NOT NULL COMMENT 'profile_extract/agent_tool_update',
     source_conversation_id BIGINT COMMENT '来源会话ID',
+    input_hash             VARCHAR(128) COMMENT '规范化输入哈希，审批绑定标识',
     status                 VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/confirmed/rejected/expired',
     expires_at             DATETIME NOT NULL COMMENT '过期时间',
     handled_at             DATETIME COMMENT '处理时间',

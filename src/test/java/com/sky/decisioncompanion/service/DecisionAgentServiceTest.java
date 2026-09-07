@@ -75,7 +75,8 @@ class DecisionAgentServiceTest {
                 profileExtractJobService,
                 conversationHistoryService,
                 toolService,
-                toolInvocationTracker);
+                toolInvocationTracker,
+                new com.sky.decisioncompanion.service.agenttool.AgentToolRegistry());
     }
 
     @Test

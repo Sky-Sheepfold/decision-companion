@@ -118,6 +118,19 @@ public class ConversationHistoryService {
         return conversation;
     }
 
+    /**
+     * 会话归属校验（不抛异常），供工具执行处作 owner 复核。会话不存在/非本人/已删除均视为不属主。
+     */
+    public boolean isOwnedConversation(Long userId, Long conversationId) {
+        if (userId == null || conversationId == null) {
+            return false;
+        }
+        ChatConversation conversation = conversationRepository.selectById(conversationId);
+        return conversation != null
+                && userId.equals(conversation.getUserId())
+                && !Boolean.TRUE.equals(conversation.getDeleted());
+    }
+
     private String titleFrom(String message) {
         String title = message == null ? "" : message.trim();
         if (title.length() <= TITLE_MAX_LENGTH) {

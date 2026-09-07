@@ -9,9 +9,11 @@ import com.sky.decisioncompanion.service.memory.DecisionRecallService;
 import com.sky.decisioncompanion.service.memory.MemoryContext;
 import com.sky.decisioncompanion.service.memory.MemoryRetrievalService;
 import com.sky.decisioncompanion.service.memory.ProfileSceneMemoryService;
+import com.sky.decisioncompanion.service.ConversationHistoryService;
 import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService;
 import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService.ConfirmedMemoryCommand;
 import com.sky.decisioncompanion.service.profile.ProfileMemoryGovernanceService.MemoryCandidateCommand;
+import com.sky.decisioncompanion.service.profile.PostureGateService;
 import com.sky.decisioncompanion.service.profile.ProfileWritePolicy;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -22,7 +24,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -49,6 +55,10 @@ public class DecisionAgentToolService {
     private final MemoryRetrievalProperties properties;
     private final AgentToolCallLogService logService;
     private final AgentToolInvocationTracker invocationTracker;
+    private final PostureGateService postureGateService;
+    private final ConversationHistoryService conversationHistoryService;
+    private final AgentToolRegistry toolRegistry;
+    private final AgentToolEffectExecutor effectExecutor;
 
     public DecisionAgentToolService(
             ProfileValuesRepository valuesRepository,
@@ -61,13 +71,21 @@ public class DecisionAgentToolService {
             DecisionRecallService decisionRecallService,
             MemoryRetrievalProperties properties,
             AgentToolCallLogService logService,
-            AgentToolInvocationTracker invocationTracker) {
+            AgentToolInvocationTracker invocationTracker,
+            PostureGateService postureGateService,
+            ConversationHistoryService conversationHistoryService,
+            AgentToolRegistry toolRegistry,
+            AgentToolEffectExecutor effectExecutor) {
         this.memoryRetrievalService = memoryRetrievalService;
         this.profileMemoryGovernanceService = profileMemoryGovernanceService;
         this.decisionRecallService = decisionRecallService;
         this.properties = properties;
         this.logService = logService;
         this.invocationTracker = invocationTracker;
+        this.postureGateService = postureGateService;
+        this.conversationHistoryService = conversationHistoryService;
+        this.toolRegistry = toolRegistry;
+        this.effectExecutor = effectExecutor;
     }
 
     @Tool(name = "searchDecisionHistory", description = "查询当前用户的历史决策记录，用于识别相似选择和决策模式。该工具只读，不会写入或修改任何档案。")
@@ -199,83 +217,191 @@ public class DecisionAgentToolService {
         logger.info("Agent Tool 触发: updateUserProfile, userId: {}, conversationId: {}, requestId: {}, inputSummary: {}",
                 context.userId(), context.conversationId(), context.requestId(), inputSummary);
 
+        // 两段式审计：先记 started，各终态用 complete* 回填
+        AgentToolCallLogService.StartedAudit audit = logService.recordStarted(
+                context.userId(), context.conversationId(), "updateUserProfile", inputSummary);
+        Long auditId = audit == null ? null : audit.id();
+
         try {
             String normalizedType = normalizeProfileType(profileType);
             if (!StringUtils.hasText(normalizedType)) {
                 String message = "暂不支持该画像类型";
-                logService.recordSkipped(context.userId(), context.conversationId(), "updateUserProfile",
-                        inputSummary, message, elapsedMillis(start));
+                logService.completeSkipped(auditId, message, elapsedMillis(start));
                 logger.info("Agent Tool 跳过: updateUserProfile, userId: {}, conversationId: {}, reason: {}",
                         context.userId(), context.conversationId(), message);
                 return new UpdateUserProfileToolResult(false, message, "", clean(subject), "skipped");
             }
             if (!StringUtils.hasText(subject) || !StringUtils.hasText(content)) {
                 String message = "画像主体和内容不能为空";
-                logService.recordSkipped(context.userId(), context.conversationId(), "updateUserProfile",
-                        inputSummary, message, elapsedMillis(start));
+                logService.completeSkipped(auditId, message, elapsedMillis(start));
                 logger.info("Agent Tool 跳过: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, reason: {}",
                         context.userId(), context.conversationId(), normalizedType, message);
                 return new UpdateUserProfileToolResult(false, message, normalizedType, clean(subject), "skipped");
             }
 
-            ProfileWriteDecision writeDecision = decideProfileWrite(normalizedType, confidence);
-            if (!writeDecision.writable()) {
-                if ("needs_confirmation".equals(writeDecision.action())) {
-                    profileMemoryGovernanceService.createCandidate(new MemoryCandidateCommand(
-                            context.userId(),
-                            normalizedType,
-                            clean(subject),
-                            clean(content),
-                            clean(detail),
-                            normalizeConfidence(confidence),
-                            safeList(evidence, 5),
-                            "agent_tool_update",
-                            context.conversationId()));
-                }
-                logService.recordSkipped(context.userId(), context.conversationId(), "updateUserProfile",
-                        inputSummary, writeDecision.logSummary(), elapsedMillis(start));
-                logger.info("Agent Tool 未写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}, reason: {}",
-                        context.userId(), context.conversationId(), normalizedType, clean(subject),
-                        writeDecision.action(), writeDecision.logSummary());
-                return new UpdateUserProfileToolResult(
-                        false, writeDecision.message(), normalizedType, clean(subject), writeDecision.action());
+            // 可见性分层：本轮场景未授权该写工具则直接拦下（模型可见 schema 但不可执行）
+            if (!context.isToolVisible("updateUserProfile")) {
+                String message = "当前场景未开放画像写入";
+                logService.completeSkipped(auditId, message + ": " + clean(subject), elapsedMillis(start));
+                logger.info("Agent Tool 场景未授权写画像: updateUserProfile, userId: {}, conversationId: {}, subject: {}",
+                        context.userId(), context.conversationId(), clean(subject));
+                return new UpdateUserProfileToolResult(false, message, normalizedType, clean(subject), "skipped");
+            }
+            // 执行处 owner 复核：会话归属校验（纵深防御，防上游传入不匹配的 userId/会话）
+            if (context.conversationId() != null
+                    && !conversationHistoryService.isOwnedConversation(context.userId(), context.conversationId())) {
+                String message = "会话归属校验失败，未执行画像写入";
+                logService.completeSkipped(auditId, message, elapsedMillis(start));
+                logger.warn("Agent Tool 会话归属校验失败: updateUserProfile, userId: {}, conversationId: {}",
+                        context.userId(), context.conversationId());
+                return new UpdateUserProfileToolResult(false, message, normalizedType, clean(subject), "skipped");
             }
 
-            ProfileMemoryGovernanceService.GovernanceResult governanceResult =
-                    profileMemoryGovernanceService.writeConfirmedMemory(new ConfirmedMemoryCommand(
-                            context.userId(),
-                            normalizedType,
-                            clean(subject),
-                            clean(content),
-                            clean(detail),
-                            normalizeConfidence(confidence),
-                            safeList(evidence, 5),
-                            "agent_tool_update",
-                            context.conversationId(),
-                            context.message(),
-                            null));
-            String resultAction = governanceResult.success() ? "written" : governanceResult.action();
-            if (governanceResult.success()) {
-                logService.recordSuccess(context.userId(), context.conversationId(), "updateUserProfile",
-                        inputSummary, "written " + normalizedType + ":" + clean(subject),
-                        elapsedMillis(start));
-                logger.info("Agent Tool 已写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}",
-                        context.userId(), context.conversationId(), normalizedType, clean(subject), resultAction);
-            } else {
-                logService.recordSkipped(context.userId(), context.conversationId(), "updateUserProfile",
-                        inputSummary, governanceResult.message(), elapsedMillis(start));
-                logger.info("Agent Tool 未写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}, reason: {}",
-                        context.userId(), context.conversationId(), normalizedType, clean(subject), resultAction, governanceResult.message());
+            String cleanedSubject = clean(subject);
+            String cleanedContent = clean(content);
+            String cleanedDetail = clean(detail);
+            String idempotencyKey = buildIdempotencyKey(context, normalizedType, cleanedSubject, cleanedContent, cleanedDetail);
+            String canonicalInputHash = canonicalInputHash(normalizedType, cleanedSubject, cleanedContent, cleanedDetail);
+
+            // 账本与业务写同事务：抢占→业务写→回填 由执行器在单一事务内完成；命中已提交终态重放、占用中短路
+            AgentToolEffectExecutor.Outcome outcome = effectExecutor.execute(
+                    context.userId(),
+                    context.conversationId(),
+                    context.requestId(),
+                    AgentToolRegistry.UPDATE_USER_PROFILE,
+                    idempotencyKey,
+                    () -> executeProfileWrite(context, auditId, start, inputSummary, normalizedType,
+                            cleanedSubject, cleanedContent, cleanedDetail, confidence, evidence, canonicalInputHash));
+
+            if (outcome.status() == AgentToolEffectLedger.AcquisitionStatus.ALREADY_COMMITTED) {
+                AgentToolEffectLedger.CommittedWrite previous = outcome.committed();
+                logService.completeSkipped(auditId, "idempotent replay: " + previous.action(), elapsedMillis(start));
+                logger.info("Agent Tool 幂等重放: updateUserProfile, userId: {}, conversationId: {}, action: {}",
+                        context.userId(), context.conversationId(), previous.action());
+                return replay(previous);
             }
+            if (outcome.status() == AgentToolEffectLedger.AcquisitionStatus.IN_FLIGHT) {
+                String message = "同一画像更新正在处理中，已忽略本次重复调用";
+                logService.completeSkipped(auditId, "in-flight duplicate: " + cleanedSubject, elapsedMillis(start));
+                logger.info("Agent Tool 幂等忽略（占用中）: updateUserProfile, userId: {}, conversationId: {}, subject: {}",
+                        context.userId(), context.conversationId(), cleanedSubject);
+                return new UpdateUserProfileToolResult(false, message, normalizedType, cleanedSubject, "processing");
+            }
+
+            AgentToolEffectExecutor.Result effectResult = outcome.result();
             return new UpdateUserProfileToolResult(
-                    governanceResult.success(), governanceResult.message(), normalizedType, clean(subject), resultAction);
+                    effectResult.updated(), effectResult.message(), effectResult.profileType(),
+                    effectResult.subject(), effectResult.action());
         } catch (Exception e) {
-            logService.recordFailure(context.userId(), context.conversationId(), "updateUserProfile",
-                    inputSummary, failureMessage("更新用户画像", e), elapsedMillis(start));
+            logService.completeFailure(auditId, failureMessage("更新用户画像", e), elapsedMillis(start));
             logger.warn("Agent Tool 调用失败: updateUserProfile, userId: {}, conversationId: {}, inputSummary: {}",
                     context.userId(), context.conversationId(), inputSummary, e);
             return new UpdateUserProfileToolResult(false, "暂时无法更新用户画像", normalizeProfileType(profileType), clean(subject), "failed");
         }
+    }
+
+    /**
+     * 业务写副作用（在 {@link AgentToolEffectExecutor} 的事务内执行）：按置信度走候选/门控降级/直写，
+     * 返回用于回填账本的结果。
+     */
+    private AgentToolEffectExecutor.Result executeProfileWrite(
+            AgentToolContext.Execution context,
+            Long auditId,
+            long start,
+            String inputSummary,
+            String normalizedType,
+            String subject,
+            String content,
+            String detail,
+            Double confidence,
+            List<String> evidence,
+            String inputHash) {
+        ProfileWriteDecision writeDecision = decideProfileWrite(normalizedType, confidence);
+        if (!writeDecision.writable()) {
+            Long candidateId = null;
+            if ("needs_confirmation".equals(writeDecision.action())) {
+                var candidate = profileMemoryGovernanceService.createCandidate(new MemoryCandidateCommand(
+                        context.userId(),
+                        normalizedType,
+                        subject,
+                        content,
+                        detail,
+                        normalizeConfidence(confidence),
+                        safeList(evidence, 5),
+                        "agent_tool_update",
+                        context.conversationId(),
+                        inputHash));
+                candidateId = candidate == null ? null : candidate.getId();
+            }
+            logService.completeSkipped(auditId, writeDecision.logSummary(), elapsedMillis(start));
+            logger.info("Agent Tool 未写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}, reason: {}",
+                    context.userId(), context.conversationId(), normalizedType, subject,
+                    writeDecision.action(), writeDecision.logSummary());
+            return new AgentToolEffectExecutor.Result(
+                    writeDecision.action(), normalizedType, subject, writeDecision.message(), false, null, candidateId);
+        }
+
+        // 深层画像门控（与异步提炼一致）：enforce 下由 LLM 裁判决定是否直接写入，拦截则降级为候选
+        String gateVerdict = null;
+        if (postureGateService.shouldGate(normalizedType)) {
+            PostureGateService.GateVerdict verdict = postureGateService.evaluate(
+                    context.userId(), normalizedType, subject, content,
+                    safeList(evidence, 5), normalizeConfidence(confidence));
+            gateVerdict = verdict.action();
+            if (!verdict.accepted()) {
+                try {
+                    profileMemoryGovernanceService.recordGateRejection(
+                            context.userId(), normalizedType, subject, gateVerdict);
+                } catch (Exception e) {
+                    logger.warn("Agent Tool 画像门控拒绝审计失败, userId: {}, profileType: {}, subject: {}",
+                            context.userId(), normalizedType, subject, e);
+                }
+                var candidate = profileMemoryGovernanceService.createCandidate(new MemoryCandidateCommand(
+                        context.userId(),
+                        normalizedType,
+                        subject,
+                        content,
+                        detail,
+                        normalizeConfidence(confidence),
+                        safeList(evidence, 5),
+                        "agent_tool_update",
+                        context.conversationId(),
+                        inputHash));
+                Long gatedCandidateId = candidate == null ? null : candidate.getId();
+                logService.completeSkipped(auditId, "gated→candidate: " + gateVerdict + " " + normalizedType + ":" + subject, elapsedMillis(start));
+                logger.info("Agent Tool 深层画像被门控降级为候选: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}",
+                        context.userId(), context.conversationId(), normalizedType, subject, gateVerdict);
+                return new AgentToolEffectExecutor.Result(
+                        "needs_confirmation", normalizedType, subject, "深层画像更新需先确认", false, null, gatedCandidateId);
+            }
+        }
+
+        ProfileMemoryGovernanceService.GovernanceResult governanceResult =
+                profileMemoryGovernanceService.writeConfirmedMemory(new ConfirmedMemoryCommand(
+                        context.userId(),
+                        normalizedType,
+                        subject,
+                        content,
+                        detail,
+                        normalizeConfidence(confidence),
+                        safeList(evidence, 5),
+                        "agent_tool_update",
+                        context.conversationId(),
+                        context.message(),
+                        gateVerdict));
+        String resultAction = governanceResult.success() ? "written" : governanceResult.action();
+        if (governanceResult.success()) {
+            logService.completeSuccess(auditId, "written " + normalizedType + ":" + subject, elapsedMillis(start));
+            logger.info("Agent Tool 已写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}",
+                    context.userId(), context.conversationId(), normalizedType, subject, resultAction);
+        } else {
+            logService.completeSkipped(auditId, governanceResult.message(), elapsedMillis(start));
+            logger.info("Agent Tool 未写入画像: updateUserProfile, userId: {}, conversationId: {}, profileType: {}, subject: {}, action: {}, reason: {}",
+                    context.userId(), context.conversationId(), normalizedType, subject, resultAction, governanceResult.message());
+        }
+        return new AgentToolEffectExecutor.Result(
+                resultAction, normalizedType, subject, governanceResult.message(),
+                governanceResult.success(), governanceResult.profileRecordId(), null);
     }
 
     private DecisionHistoryItem toDecisionHistoryItem(DecisionRecallService.DecisionRecallItem decision) {
@@ -481,6 +607,48 @@ public class DecisionAgentToolService {
 
     private String clean(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private UpdateUserProfileToolResult replay(AgentToolEffectLedger.CommittedWrite previous) {
+        boolean updated = "written".equals(previous.action());
+        return new UpdateUserProfileToolResult(
+                updated,
+                safe(previous.message()),
+                safe(previous.profileType()),
+                safe(previous.subject()),
+                safe(previous.action()));
+    }
+
+    private String buildIdempotencyKey(
+            AgentToolContext.Execution context, String profileType, String subject, String content, String detail) {
+        String paramsHash = canonicalInputHash(profileType, subject, content, detail);
+        String contract = toolRegistry.contractRevision(AgentToolRegistry.UPDATE_USER_PROFILE);
+        String raw = context.userId() + ":" + nullToEmpty(context.conversationId()) + ":"
+                + contract + ":" + paramsHash;
+        return sha256(raw);
+    }
+
+    /**
+     * 规范化输入哈希：仅由规范化后的画像参数决定，用于把候选/审批绑定到具体输入，
+     * 避免一次审批被不同参数的调用复用（借鉴 waoowaoo 的 inputHash）。
+     */
+    private String canonicalInputHash(String profileType, String subject, String content, String detail) {
+        String params = String.join("|", safe(profileType), safe(subject), safe(content), safe(detail));
+        return sha256(params);
+    }
+
+    private String nullToEmpty(Long value) {
+        return value == null ? "" : value.toString();
+    }
+
+    private String sha256(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(bytes);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
     }
 
     private long elapsedMillis(long start) {

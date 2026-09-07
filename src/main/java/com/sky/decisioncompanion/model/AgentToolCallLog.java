@@ -36,7 +36,7 @@ public class AgentToolCallLog {
     @Schema(description = "输出摘要")
     private String outputSummary;
 
-    @Schema(description = "状态：成功/失败/跳过，存储值为 success/failed/skipped")
+    @Schema(description = "状态：成功/失败/跳过/执行中，存储值为 success/failed/skipped/started")
     private String status;
 
     @Schema(description = "耗时毫秒")
@@ -44,6 +44,9 @@ public class AgentToolCallLog {
 
     @Schema(description = "错误信息")
     private String errorMessage;
+
+    @Schema(description = "完成时间（started 阶段为空，terminal 阶段回填）")
+    private LocalDateTime finishedAt;
 
     @Schema(description = "创建时间")
     @TableField(fill = FieldFill.INSERT)

@@ -30,6 +30,8 @@ public class ProfileMemoryCandidate {
     private String evidence;
     private String source;
     private Long sourceConversationId;
+    @Schema(description = "规范化输入哈希，审批绑定标识")
+    private String inputHash;
     private String status;
     private LocalDateTime expiresAt;
     private LocalDateTime handledAt;

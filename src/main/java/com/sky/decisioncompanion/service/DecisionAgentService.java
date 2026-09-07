@@ -4,6 +4,7 @@ import com.sky.decisioncompanion.advisor.ProfileAdvisorService;
 import com.sky.decisioncompanion.common.ChatResponse;
 import com.sky.decisioncompanion.model.ChatConversation;
 import com.sky.decisioncompanion.service.agenttool.AgentToolContext;
+import com.sky.decisioncompanion.service.agenttool.AgentToolRegistry;
 import com.sky.decisioncompanion.service.agenttool.DecisionAgentToolService;
 import com.sky.decisioncompanion.service.agenttool.AgentToolInvocationTracker;
 import com.sky.decisioncompanion.service.memory.MemoryContext;
@@ -17,7 +18,9 @@ import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -31,6 +34,7 @@ public class DecisionAgentService {
     private final ConversationHistoryService conversationHistoryService;
     private final DecisionAgentToolService agentToolService;
     private final AgentToolInvocationTracker toolInvocationTracker;
+    private final AgentToolRegistry toolRegistry;
 
     public DecisionAgentService(
             ChatClient.Builder builder,
@@ -39,7 +43,8 @@ public class DecisionAgentService {
             ProfileExtractJobService profileExtractJobService,
             ConversationHistoryService conversationHistoryService,
             DecisionAgentToolService agentToolService,
-            AgentToolInvocationTracker toolInvocationTracker) {
+            AgentToolInvocationTracker toolInvocationTracker,
+            AgentToolRegistry toolRegistry) {
         this.chatClient = builder
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
@@ -48,6 +53,7 @@ public class DecisionAgentService {
         this.conversationHistoryService = conversationHistoryService;
         this.agentToolService = agentToolService;
         this.toolInvocationTracker = toolInvocationTracker;
+        this.toolRegistry = toolRegistry;
     }
 
     public String chat(Long userId, String userMessage) {
@@ -168,7 +174,21 @@ public class DecisionAgentService {
             context.put(AgentToolContext.MAX_SEMANTIC_SCORE, metrics.maxSemanticScore());
         }
         context.put(AgentToolContext.SEMANTIC_QUERY, userMessage);
+        context.put(AgentToolContext.VISIBLE_TOOLS, visibleTools(userMessage));
         return context;
+    }
+
+    /**
+     * 按场景声明本轮允许执行的工具（可见性分层：注册≠对模型可见≠有权执行）。
+     * 默认暴露读/分析类工具（来自注册表）；写画像工具仅当消息带明确长期偏好信号时才放行，
+     * 减少普通倾诉场景下模型的误写。
+     */
+    private Set<String> visibleTools(String userMessage) {
+        Set<String> tools = new LinkedHashSet<>(toolRegistry.defaultExposedNames());
+        if (looksLikeProfileUpdateCandidate(userMessage)) {
+            tools.add(toolRegistry.primaryWriteName());
+        }
+        return tools;
     }
 
     private void logProfileToolInvocationState(Long userId, Long conversationId, String requestId, String userMessage) {

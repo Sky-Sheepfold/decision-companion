@@ -115,7 +115,8 @@ class ProfileMemoryGovernanceServiceTest {
                 new BigDecimal("0.82"),
                 List.of("我想慢慢成长", "不太想被推着跑"),
                 "profile_extract",
-                99L));
+                99L,
+                null));
 
         LocalDateTime after = LocalDateTime.now();
         assertThat(candidate.getId()).isEqualTo(11L);
@@ -149,7 +150,8 @@ class ProfileMemoryGovernanceServiceTest {
                         new BigDecimal("0.85"),
                         List.of("重复证据", " 新证据 "),
                         "agent_tool_update",
-                        100L));
+                        100L,
+                        null));
 
         assertThat(candidate).isSameAs(existing);
         assertThat(candidate.getConfidence()).isEqualByComparingTo("0.85");
@@ -648,6 +650,7 @@ class ProfileMemoryGovernanceServiceTest {
                         new BigDecimal("0.90"),
                         List.of("家人比钱重要多了"),
                         "profile_extract",
+                        null,
                         null));
 
         // 命中近重复候选：合并到原候选，且规范文本不被新措辞覆盖
@@ -686,6 +689,7 @@ class ProfileMemoryGovernanceServiceTest {
                         new BigDecimal("0.90"),
                         List.of("证据"),
                         "profile_extract",
+                        null,
                         null));
 
         // 嵌入失败降级：不阻塞，直接新增候选

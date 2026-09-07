@@ -124,6 +124,7 @@ public class ProfileMemoryGovernanceService {
         candidate.setEvidence(toJson(command.evidence()));
         candidate.setSource(clean(command.source()));
         candidate.setSourceConversationId(command.sourceConversationId());
+        candidate.setInputHash(command.inputHash());
         candidate.setStatus(STATUS_PENDING);
         candidate.setExpiresAt(now.plusDays(7));
         candidate.setCreatedAt(now);
@@ -938,7 +939,8 @@ public class ProfileMemoryGovernanceService {
             BigDecimal confidence,
             List<String> evidence,
             String source,
-            Long sourceConversationId) {
+            Long sourceConversationId,
+            String inputHash) {
     }
 
     public record MemoryCorrectionCommand(String subject, String content, String detail, String reason) {

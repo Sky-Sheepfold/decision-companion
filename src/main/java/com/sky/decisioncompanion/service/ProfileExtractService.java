@@ -361,6 +361,7 @@ public class ProfileExtractService {
                             confidence,
                             evidence,
                             "profile_extract",
+                            null,
                             null));
             return 0;
         }
@@ -389,6 +390,7 @@ public class ProfileExtractService {
                                     confidence,
                                     evidence,
                                     "profile_extract",
+                                    null,
                                     null));
                     logger.info("深层画像被门控降级为候选, userId: {}, profileType: {}, subject: {}, action: {}",
                             userId, profileType, subject, gateVerdict);

@@ -3,7 +3,10 @@ package com.sky.decisioncompanion.service.agenttool;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.util.Assert;
 
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 public final class AgentToolContext {
 
@@ -15,6 +18,8 @@ public final class AgentToolContext {
     public static final String SEMANTIC_HIT_COUNT = "semanticHitCount";
     public static final String MAX_SEMANTIC_SCORE = "maxSemanticScore";
     public static final String SEMANTIC_QUERY = "semanticQuery";
+    /** 本轮允许执行的工具名集合；缺省表示全部允许（权限由上层按场景配置）。 */
+    public static final String VISIBLE_TOOLS = "visibleTools";
 
     private AgentToolContext() {
     }
@@ -32,7 +37,24 @@ public final class AgentToolContext {
                 booleanValue(context.get(SEMANTIC_MEMORY_RETRIEVED)),
                 intValue(context.get(SEMANTIC_HIT_COUNT)),
                 doubleValue(context.get(MAX_SEMANTIC_SCORE)),
-                stringValue(context.get(SEMANTIC_QUERY)));
+                stringValue(context.get(SEMANTIC_QUERY)),
+                stringSet(context.get(VISIBLE_TOOLS)));
+    }
+
+    private static Set<String> stringSet(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Collection<?> collection) {
+            Set<String> result = new HashSet<>();
+            for (Object item : collection) {
+                if (item != null) {
+                    result.add(item.toString());
+                }
+            }
+            return result;
+        }
+        return null;
     }
 
     private static Long longValue(Object value) {
@@ -87,6 +109,15 @@ public final class AgentToolContext {
             boolean semanticMemoryRetrieved,
             int semanticHitCount,
             Double maxSemanticScore,
-            String semanticQuery) {
+            String semanticQuery,
+            Set<String> visibleTools) {
+
+        /**
+         * 该工具本轮是否允许执行。{@code visibleTools} 缺省（null）表示未限制、放行；
+         * 否则要求工具名在允许集合内。
+         */
+        public boolean isToolVisible(String toolName) {
+            return visibleTools == null || visibleTools.contains(toolName);
+        }
     }
 }
