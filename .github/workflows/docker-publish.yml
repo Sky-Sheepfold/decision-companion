@@ -87,8 +87,4 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/id_deploy ~/.ssh/known_hosts
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -i ~/.ssh/id_deploy -p 47896 sky@43.138.135.99 \
-            'cd /opt/1panel/docker/compose/decision-companion \
-            && docker compose -f docker-compose.yml pull backend \
-            && docker compose -f docker-compose.yml up -d backend \
-            && docker image prune -f'
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -i ~/.ssh/id_deploy -p 47896 sky@43.138.135.99 backend
