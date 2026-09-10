@@ -49,6 +49,9 @@ public class MemoryInsightService {
     public static final String VERDICT_UNJUDGED = "";
 
     private static final int HYPOTHESIS_MAX = 500;
+    /** 洞察证据条数上限与单条长度上限：保证序列化后不超 memory_insight.evidence(varchar(1000)) 列宽。 */
+    private static final int EVIDENCE_MAX_ITEMS = 8;
+    private static final int EVIDENCE_ITEM_MAX_LENGTH = 100;
 
     private final MemoryInsightRepository insightRepository;
     private final MemoryAwarenessRepository awarenessRepository;
@@ -143,7 +146,7 @@ public class MemoryInsightService {
             MemoryInsight insight = new MemoryInsight();
             insight.setUserId(userId);
             insight.setHypothesis(truncate(hypothesis, HYPOTHESIS_MAX));
-            insight.setEvidence(toJson(draft.evidence()));
+            insight.setEvidence(toJson(capEvidence(draft.evidence())));
             insight.setConfidence(normalizeConfidence(draft.confidence()));
             insight.setVerdict(VERDICT_UNJUDGED);
             insight.setSourceAwarenessIds(sourceIdsText);
@@ -490,11 +493,27 @@ public class MemoryInsightService {
 
     private String mergeEvidence(String existingJson, List<String> incoming) {
         List<String> existing = parseEvidence(existingJson);
-        return toJson(Stream.concat(existing.stream(), incoming.stream())
+        List<String> merged = Stream.concat(existing.stream(), incoming.stream())
                 .filter(StringUtils::hasText)
                 .map(String::trim)
                 .distinct()
-                .toList());
+                .toList();
+        return toJson(capEvidence(merged));
+    }
+
+    /** 洞察证据有界化：去空白、单条截断、去重、限制条数上限，保证序列化后不超 evidence 列宽（且 JSON 合法）。 */
+    private List<String> capEvidence(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        return values.stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .map(value -> truncate(value, EVIDENCE_ITEM_MAX_LENGTH))
+                .filter(StringUtils::hasText)
+                .distinct()
+                .limit(EVIDENCE_MAX_ITEMS)
+                .toList();
     }
 
     private List<String> parseEvidence(String evidence) {
