@@ -12,6 +12,13 @@ spring:
         options:
           model: qwen-plus
           temperature: 0.7
+      embedding:
+        options:
+          # 显式固定 embedding 模型/维度/文本类型，与存量向量空间一致（text-embedding-v3 / 1024 / document），
+          # 防止库默认值（如 text-embedding-v2 1536 维）漂移导致 Chroma 向量空间不兼容、语义召回归零
+          model: text-embedding-v3
+          dimensions: 1024
+          text-type: document
 
     vectorstore:
       chroma:
