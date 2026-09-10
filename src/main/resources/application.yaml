@@ -64,7 +64,9 @@ decision-companion:
       orphan-timeout-minutes: 30
       retry-delay-ms: 15000
     posture-gate:
-      mode: off
+      # 显式开启深层画像门控（enforce）：LLM 裁判 accept 才直写正式表，downgrade/reject 转候选。
+      # 注意必须带引号，裸 off/enforce 会被 YAML 解析成布尔导致绑定错乱（off 曾因此被绑成 "false" 而误激活门控）
+      mode: "enforce"
     governance:
       expire-scan-ms: 3600000
       # 真实数据实测：LLM 换措辞的候选相似度约 0.75-0.81，0.85 偏严会漏合并，取 0.80 平衡
@@ -98,13 +100,3 @@ logging:
   level:
     com.sky.decisioncompanion: DEBUG
     org.springframework.ai: DEBUG
-
-# 临时诊断：暴露 env/configprops 只读端点定位配置注入源，定位结束后回滚
-management:
-  endpoints:
-    web:
-      exposure:
-        include: env,configprops
-  endpoint:
-    env:
-      show-values: always
