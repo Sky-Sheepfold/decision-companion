@@ -98,3 +98,13 @@ logging:
   level:
     com.sky.decisioncompanion: DEBUG
     org.springframework.ai: DEBUG
+
+# 临时诊断：暴露 env/configprops 只读端点定位配置注入源，show-values=never 隐藏机密值，定位结束后回滚
+management:
+  endpoints:
+    web:
+      exposure:
+        include: env,configprops
+  endpoint:
+    env:
+      show-values: never
